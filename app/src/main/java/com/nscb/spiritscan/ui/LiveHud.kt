@@ -120,7 +120,6 @@ fun LiveHud(
             .background(Bg)
             .padding(16.dp)
     ) {
-        // ===== LIVE CAMERA PREVIEW (non-scroll, stable) =====
         Text(
             "Live Camera",
             color = Mute,
@@ -137,7 +136,6 @@ fun LiveHud(
 
         Spacer(Modifier.height(16.dp))
 
-        // ===== SCROLLABLE HUD CONTENT =====
         Column(
             Modifier
                 .fillMaxWidth()
@@ -201,11 +199,12 @@ fun LiveHud(
                     fontSize = 22.sp
                 )
 
+                // FIXED: matches your actual EntityOutput model
                 Text(
                     "p=${(output.jonesScore * 100).toInt()}%  |B| ${
-                        "%.2f".format(output.magUT)
+                        "%.2f".format(output.magUt)
                     } µT  z ${
-                        "%.1f".format(output.zScore)
+                        "%.1f".format(output.zMag)
                     }",
                     color = Mute,
                     fontFamily = FontFamily.Monospace,
