@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: ["**"]
+    branches: ["***"]
   workflow_dispatch:
 
 jobs:
@@ -23,6 +23,9 @@ jobs:
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
+
+      - name: Clear Gradle cache
+        run: rm -rf ~/.gradle/caches
 
       - name: Assemble release (debug-signed, sideloadable)
         run: ./gradlew assembleRelease --no-daemon
