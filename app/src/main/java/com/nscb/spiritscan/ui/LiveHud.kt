@@ -22,7 +22,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -51,6 +53,10 @@ import com.nscb.spiritscan.ui.modes.SdeModeUI
 import com.nscb.spiritscan.ui.modes.SurveyModeUI
 import com.nscb.spiritscan.ui.performance.NSCBPerformanceOverlay
 import com.nscb.spiritscan.ui.shader.LiveShader
+import com.nscb.spiritscan.ui.vision.HeatOverlay
+import com.nscb.spiritscan.ui.vision.UvOverlay
+import com.nscb.spiritscan.ui.vision.MagOverlay
+import com.nscb.spiritscan.ui.vision.NightOverlay
 
 private val Bg = Color(0xFF0B090B)
 private val Surface = Color(0xFF15181E)
@@ -60,6 +66,18 @@ private val Mute = Color(0xFF8B9196)
 private val Signal = Color(0xFF709A8E)
 private val Danger = Color(0xFFC47A72)
 private val Border = Color(0xFF2A303A)
+
+enum class VisionMode {
+    NORMAL,    // camera only
+    HEAT,      // CMOS-style ironbow residual
+    UV,        // cool UV false-color
+    MAG,       // magnetic field overlay
+    NIGHT,     // low-light green phosphor
+    GRID,      // grid + corners
+    RING,      // entity ring
+    RESIDUAL,  // shader residual layer
+    FULL       // all overlays
+}
 
 @Composable
 fun SpiritTheme(content: @Composable () -> Unit) {
@@ -114,25 +132,41 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun Chip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (selected) Signal else Mute
+        )
+    ) {
+        Text(
+            label,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = if (selected) Signal else Mute
+        )
+    }
+}
+
+@Composable
 private fun DataCard(
     title: String,
-    modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Column(
-        modifier
+        Modifier
             .fillMaxWidth()
             .background(Card, RoundedCornerShape(10.dp))
             .border(1.dp, Border, RoundedCornerShape(10.dp))
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         content = {
-            Text(
-                title,
-                color = Mute,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace
-            )
+            Text(title, color = Mute, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             content()
         }
     )
@@ -151,162 +185,229 @@ fun LiveHud(vm: ScanViewModel) {
     val perf by vm.perf.collectAsState()
     val ctx = LocalContext.current
 
+    var vision by remember { mutableStateOf(VisionMode.FULL) }
+
     Column(
         Modifier
             .fillMaxSize()
             .background(Bg)
+            .statusBarsPadding()
     ) {
-        // ===== FIXED HEADER + CONTROLS (never scrolls) =====
+        // ===== COMPACT TOP BAR (always visible) =====
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .background(Surface)
+                .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-            Text("NSCB v8.3", color = Mute, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            Text("SpiritScan", color = Fg, fontSize = 22.sp)
-
-            Spacer(Modifier.height(8.dp))
-
             Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("SpiritScan", color = Fg, fontSize = 18.sp)
+                Text("v8.3", color = Mute, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            }
+
+            // Primary actions — compact
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
                     onClick = { vm.arm(ctx) },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Signal)
-                ) { Text("Arm") }
-                Button(onClick = { vm.calibrate() }) { Text("Calibrate 8s") }
+                ) { Text("Arm", fontSize = 12.sp) }
+
+                Button(
+                    onClick = { vm.calibrate() },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) { Text("Cal 8s", fontSize = 12.sp) }
+
                 Button(
                     onClick = { vm.toggleBox() },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (boxOn) Signal else Surface
                     )
-                ) { Text(if (boxOn) "Box ON" else "Spirit box") }
-                Button(onClick = { vm.toggleWalk() }) {
-                    Text(if (walking) "Stop walk" else "Walk")
-                }
+                ) { Text(if (boxOn) "Box ON" else "Box", fontSize = 12.sp) }
+
+                Button(
+                    onClick = { vm.toggleWalk() },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) { Text(if (walking) "Stop" else "Walk", fontSize = 12.sp) }
+
                 TextButton(onClick = { vm.resetSurvey() }) {
-                    Text("Reset", color = Mute)
+                    Text("Reset", color = Mute, fontSize = 11.sp)
                 }
             }
 
-            Spacer(Modifier.height(6.dp))
-
-            // Sweep modes
+            // Vision mode row — changes what draws on the camera
             Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                com.nscb.spiritscan.sensor.SweepMode.entries.forEach { m ->
-                    TextButton(onClick = { vm.setSweep(m) }) {
-                        Text(
-                            m.name,
-                            color = if (sweep == m) Signal else Mute,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                Text("VIEW ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                VisionMode.entries.forEach { m ->
+                    Chip(
+                        label = m.name,
+                        selected = vision == m,
+                        onClick = { vision = m }
+                    )
                 }
             }
 
-            // Scan modes
+            // Scan mode row
             Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Text("MODE ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 ScanMode.entries.forEach { m ->
-                    TextButton(onClick = { vm.setMode(m) }) {
-                        Text(
-                            m.name,
-                            color = if (currentMode == m) Signal else Mute,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
+                    Chip(
+                        label = m.name,
+                        selected = currentMode == m,
+                        onClick = { vm.setMode(m) }
+                    )
+                }
+            }
+
+            // Sweep row (only when box relevant)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("SWEEP", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                com.nscb.spiritscan.sensor.SweepMode.entries.forEach { m ->
+                    Chip(
+                        label = m.name,
+                        selected = sweep == m,
+                        onClick = { vm.setSweep(m) }
+                    )
                 }
             }
         }
 
-        // ===== FIXED CAMERA (never scrolls) =====
+        // ===== CAMERA (fixed height, never scrolls away) =====
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(240.dp)
-                .padding(horizontal = 12.dp)
+                .height(220.dp)
         ) {
+            // Always show live camera
             CameraPreview(Modifier.fillMaxSize())
-            LiveShader(output)
-            UltraGridOverlay()
-            UltraCorners(ultraColorForMode(currentMode.name))
-            val f = fusion
-            if (f != null) {
-                UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
+
+            // Vision layers controlled by VIEW chips
+            when (vision) {
+                VisionMode.NORMAL -> {
+                    // live camera only
+                }
+                VisionMode.HEAT -> {
+                    HeatOverlay(output)
+                }
+                VisionMode.UV -> {
+                    UvOverlay(output)
+                }
+                VisionMode.MAG -> {
+                    MagOverlay(output)
+                }
+                VisionMode.NIGHT -> {
+                    NightOverlay(output)
+                }
+                VisionMode.GRID -> {
+                    UltraGridOverlay()
+                    UltraCorners(ultraColorForMode(currentMode.name))
+                }
+                VisionMode.RING -> {
+                    UltraCorners(ultraColorForMode(currentMode.name))
+                    val f = fusion
+                    if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
+                }
+                VisionMode.RESIDUAL -> {
+                    LiveShader(output)
+                }
+                VisionMode.FULL -> {
+                    LiveShader(output)
+                    UltraGridOverlay()
+                    UltraCorners(ultraColorForMode(currentMode.name))
+                    val f = fusion
+                    if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
+                }
             }
+
+            // Small vision label on camera
+            Text(
+                vision.name,
+                color = Signal,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
         }
 
-        // ===== SCROLLABLE DATA AREA ONLY =====
+        // ===== SCROLLABLE DATA ONLY =====
         Column(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Tactical HUD card
-            DataCard("TACTICAL HUD") {
-                NSCBHud(hud)
-            }
-
-            // Core readings card
             DataCard("READINGS") {
                 Text(
-                    "Jones  ${output.jonesLabel}  ·  ${(output.jonesScore * 100).toInt()}%",
-                    color = Fg,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp
+                    "Jones  ${output.jonesLabel}  ${(output.jonesScore * 100).toInt()}%",
+                    color = Fg, fontFamily = FontFamily.Monospace, fontSize = 13.sp
                 )
                 Text(
                     "|B| ${"%.2f".format(output.magUt)} µT   z ${"%.2f".format(output.zMag)}",
-                    color = Mute,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
+                    color = Mute, fontFamily = FontFamily.Monospace, fontSize = 12.sp
                 )
                 Text(
-                    "QIDA ${"%.2f".format(output.qida)}   Omega ${"%.2f".format(output.omegaTrust)}   SDE ${"%.2f".format(output.sdeComposite)}",
-                    color = Mute,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
+                    "QIDA ${"%.2f".format(output.qida)}  Omega ${"%.2f".format(output.omegaTrust)}  SDE ${"%.2f".format(output.sdeComposite)}",
+                    color = Mute, fontFamily = FontFamily.Monospace, fontSize = 12.sp
                 )
                 Text(
-                    if (output.calibrated) "baseline locked" else "calibrating ${(output.calProgress * 100).toInt()}%",
+                    if (output.calibrated) "baseline locked"
+                    else "calibrating ${(output.calProgress * 100).toInt()}%",
                     color = if (output.calibrated) Signal else Mute,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
                 )
             }
 
-            // Site / residual card
-            DataCard("SITE / RESIDUAL") {
+            DataCard("SITE") {
                 Text(
                     output.survey.activity.uppercase(),
                     color = if (output.survey.activity.contains("unclass", true)) Danger else Fg,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp
+                    fontSize = 13.sp
                 )
                 Text(output.survey.note, color = Mute, fontSize = 12.sp)
                 Text(
-                    "Heading ${"%.1f".format(output.survey.heading)}°   Lux ${output.survey.lux?.toInt() ?: "n/a"}",
-                    color = Mute,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
+                    "Hdg ${"%.0f".format(output.survey.heading)}°  Lux ${output.survey.lux?.toInt() ?: "n/a"}",
+                    color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
-                output.survey.ambientC?.let {
-                    Text("Ambient ${"%.1f".format(it)} °C", color = Mute, fontSize = 11.sp)
-                }
             }
 
-            // Mode-specific panel
+            DataCard("HUD") {
+                NSCBHud(hud)
+            }
+
             DataCard("MODE · ${currentMode.name}") {
                 when (currentMode) {
                     ScanMode.JONES -> JonesModeUI(output)
@@ -321,18 +422,17 @@ fun LiveHud(vm: ScanViewModel) {
                 }
             }
 
-            // Diagnostics (collapsed style)
-            DataCard("DIAGNOSTICS") {
+            DataCard("DIAG") {
                 NSCBDiagnostics(diag)
                 NSCBPerformanceOverlay(perf)
             }
 
             Text(
-                "Candidate-entity is an unclassified residual after device and environmental subtraction — not a ghost detector.",
+                "Unclassified residual after device/environment subtraction — not a ghost detector.",
                 color = Mute,
-                fontSize = 11.sp
+                fontSize = 10.sp
             )
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
         }
     }
 }
