@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -103,6 +104,7 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
@@ -123,7 +125,11 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
             e.printStackTrace()
         }
     }
-    AndroidView(modifier = modifier, factory = { previewView })
+    AndroidView(
+        modifier = modifier,
+        factory = { previewView },
+        update = { }
+    )
 }
 
 @Composable
@@ -141,100 +147,55 @@ fun LiveHud(vm: ScanViewModel) {
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
 
-    // Root: NO scroll on outer — only data panel scrolls
     Column(
         Modifier
             .fillMaxSize()
             .background(Bg)
-            .systemBarsPadding()
+            .padding(top = 28.dp) // clear status bar without relying on systemBarsPadding
     ) {
-        // ========== FIXED TOP BAR (always visible) ==========
+        // Title + FILTER (top, fixed)
         Column(
             Modifier
                 .fillMaxWidth()
                 .background(Surface)
-                .padding(8.dp)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
-            Text("SpiritScan v8.3", color = Fg, fontSize = 16.sp)
-
-            Spacer(Modifier.height(6.dp))
-
-            // ARM / CAL / BOX / WALK — large enough to hit
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Button(
-                    onClick = { vm.arm(ctx) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Signal)
-                ) { Text("ARM", fontSize = 13.sp) }
-
-                Button(
-                    onClick = { vm.calibrate() },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                ) { Text("CAL 8s", fontSize = 13.sp) }
-
-                Button(
-                    onClick = { vm.toggleBox() },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (boxOn) Signal else ChipOff
-                    )
-                ) { Text(if (boxOn) "BOX ON" else "BOX", fontSize = 13.sp) }
-
-                Button(
-                    onClick = { vm.toggleWalk() },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                ) { Text(if (walking) "STOP" else "WALK", fontSize = 13.sp) }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // FILTER row
-            Text("FILTER", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("SpiritScan", color = Fg, fontSize = 15.sp)
             Spacer(Modifier.height(4.dp))
+            Text("FILTER", color = Mute, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
             Row(
                 Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 FilterMode.entries.forEach { m ->
                     Button(
                         onClick = { filter = m },
-                        modifier = Modifier.height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (filter == m) ChipOn else ChipOff,
                             contentColor = if (filter == m) Signal else Mute
                         ),
                         shape = RoundedCornerShape(6.dp)
                     ) {
-                        Text(m.label, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text(m.label, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                     }
                 }
             }
         }
 
-        // ========== SMALL CAMERA (fixed 140dp) ==========
+        // SMALL camera — hard max height, clipped
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(140.dp)
+                .height(120.dp)
                 .padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(4.dp))
                 .border(1.dp, Border, RoundedCornerShape(4.dp))
         ) {
             CameraPreview(Modifier.fillMaxSize())
-
             when (filter) {
                 FilterMode.CAM -> {}
                 FilterMode.HEAT -> HeatOverlay(output)
@@ -245,26 +206,23 @@ fun LiveHud(vm: ScanViewModel) {
                 FilterMode.NIGHT -> NightOverlay(output)
                 FilterMode.RING -> {
                     val f = fusion
-                    if (f != null) {
-                        UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
-                    }
+                    if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
                 }
             }
-
             Text(
-                "${filter.label} · ${filter.modelHint}",
+                "${filter.label}",
                 color = Signal,
                 fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(4.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(3.dp))
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                    .background(Color.Black.copy(0.6f), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
             )
         }
 
-        // ========== DATA (only this scrolls) ==========
+        // Scrollable data
         Column(
             Modifier
                 .fillMaxWidth()
@@ -273,7 +231,6 @@ fun LiveHud(vm: ScanViewModel) {
                 .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Model outputs card
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -282,31 +239,27 @@ fun LiveHud(vm: ScanViewModel) {
                     .padding(10.dp)
             ) {
                 Text("MODEL OUTPUTS", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.height(4.dp))
                 Text(
-                    "Jones ${output.jonesLabel}  ${(output.jonesScore * 100).toInt()}%",
+                    "Jones ${output.jonesLabel} ${(output.jonesScore * 100).toInt()}%",
                     color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp
                 )
                 Text(
-                    "QIDA ${"%.2f".format(output.qida)}  Omega ${"%.2f".format(output.omegaTrust)}  SDE ${"%.2f".format(output.sdeComposite)} ${if (output.sdeOk) "ok" else "FAIL"}",
-                    color = if (output.sdeOk) Mute else Danger,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
+                    "QIDA ${"%.2f".format(output.qida)}  Om ${"%.2f".format(output.omegaTrust)}  SDE ${"%.2f".format(output.sdeComposite)}",
+                    color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
                 Text(
-                    "|B| ${"%.2f".format(output.magUt)} µT  z ${"%.2f".format(output.zMag)}  res ${"%.2f".format(output.residualLevel)}",
+                    "|B| ${"%.2f".format(output.magUt)}  z ${"%.2f".format(output.zMag)}  res ${"%.2f".format(output.residualLevel)}",
                     color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
                 Text(
                     if (output.calibrated) "baseline locked"
-                    else "calibrating ${(output.calProgress * 100).toInt()}%  → tap ARM then CAL",
+                    else "IDLE — press ARM then CAL on the bottom bar",
                     color = if (output.calibrated) Signal else Danger,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
                 )
             }
 
-            // Site
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -314,48 +267,24 @@ fun LiveHud(vm: ScanViewModel) {
                     .border(1.dp, Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
-                Text("SITE", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                Text(
-                    output.survey.activity.uppercase(),
-                    color = if (output.survey.activity.contains("unclass", true)) Danger else Fg,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
-                )
+                Text("SITE  ${output.survey.activity.uppercase()}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 Text(output.survey.note, color = Mute, fontSize = 11.sp)
             }
 
-            // Sweep
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
                 Text("SWEEP ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 com.nscb.spiritscan.sensor.SweepMode.entries.forEach { m ->
                     TextButton(onClick = { vm.setSweep(m) }) {
-                        Text(
-                            m.name,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (sweep == m) Signal else Mute
-                        )
+                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (sweep == m) Signal else Mute)
                     }
                 }
             }
 
-            // Mode chips
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
                 Text("MODE ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 ScanMode.entries.forEach { m ->
                     TextButton(onClick = { vm.setMode(m) }) {
-                        Text(
-                            m.name,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (currentMode == m) Signal else Mute
-                        )
+                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (currentMode == m) Signal else Mute)
                     }
                 }
             }
@@ -367,7 +296,6 @@ fun LiveHud(vm: ScanViewModel) {
                     .border(1.dp, Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
-                Text("MODE · ${currentMode.name}", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 when (currentMode) {
                     ScanMode.JONES -> JonesModeUI(output)
                     ScanMode.MAGNETIC -> MagneticModeUI(output)
@@ -388,13 +316,46 @@ fun LiveHud(vm: ScanViewModel) {
                     .border(1.dp, Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
-                Text("HUD / DIAG", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 NSCBHud(hud)
                 NSCBDiagnostics(diag)
                 NSCBPerformanceOverlay(perf)
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // ========== FIXED BOTTOM BAR — ARM / CAL / BOX / WALK always here ==========
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Surface)
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .navigationBarsPadding(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Button(
+                onClick = { vm.arm(ctx) },
+                modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Signal)
+            ) { Text("ARM", fontSize = 14.sp) }
+
+            Button(
+                onClick = { vm.calibrate() },
+                modifier = Modifier.weight(1f).height(48.dp)
+            ) { Text("CAL", fontSize = 14.sp) }
+
+            Button(
+                onClick = { vm.toggleBox() },
+                modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (boxOn) Signal else ChipOff
+                )
+            ) { Text(if (boxOn) "BOX*" else "BOX", fontSize = 14.sp) }
+
+            Button(
+                onClick = { vm.toggleWalk() },
+                modifier = Modifier.weight(1f).height(48.dp)
+            ) { Text(if (walking) "STOP" else "WALK", fontSize = 14.sp) }
         }
     }
 }
