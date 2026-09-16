@@ -76,17 +76,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         }
         sensors = SensorStreamManager(ctx) { sample ->
             try {
-                val snap = sensors?.buffer?.snapshot() ?: emptyList()
+                val snap = sensors?.buffer?.snapshot().orEmpty()
                 val out = engine.process(
-                    sample,
-                    snap,
-                    visionResidual,
-                    sensors?.heading ?: 0f,
-                    sensors?.ambientC,
-                    sensors?.lux,
-                    0.55f,
-                    0.25f,
-                    box.rms,
+                    sample = sample,
+                    window = snap,
+                    visResidual = visionResidual,
+                    heading = sensors?.heading ?: 0f,
+                    ambientC = sensors?.ambientC,
+                    lux = sensors?.lux,
+                    lumHot = 0.55f,
+                    lumCold = 0.25f,
+                    audioRms = box.rms,
                 )
                 _output.value = out
 
