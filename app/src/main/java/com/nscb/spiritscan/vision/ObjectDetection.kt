@@ -1,16 +1,17 @@
 package com.nscb.spiritscan.vision
 
-import android.graphics.RectF
+import android.graphics.Rect
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.objects.DetectedObject
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.ObjectDetector
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class DetectedObjectBox(
-    val left: Float,   // 0..1 normalized
+    val left: Float,
     val top: Float,
     val right: Float,
     val bottom: Float,
@@ -19,8 +20,7 @@ data class DetectedObjectBox(
 )
 
 /**
- * On-device ML Kit object detector bound to CameraX ImageAnalysis.
- * Boxes are normalized to the analysis image size (0..1).
+ * On-device ML Kit object detector for CameraX ImageAnalysis.
  */
 class SpiritObjectDetector(
     private val onResult: (List<DetectedObjectBox>) -> Unit
@@ -34,7 +34,7 @@ class SpiritObjectDetector(
             .build()
     )
 
-    private val busy = AtomicReference(false)
+    private val busy = AtomicBoolean(false)
 
     @androidx.camera.core.ExperimentalGetImage
     override fun analyze(imageProxy: ImageProxy) {
@@ -42,32 +42,43 @@ class SpiritObjectDetector(
             imageProxy.close()
             return
         }
-        val media = imageProxy.image
-        if (media == null) {
+
+        val mediaImage = imageProxy.image
+        if (mediaImage == null) {
             busy.set(false)
             imageProxy.close()
             return
         }
-        val image = InputImage.fromMediaImage(media, imageProxy.imageInfo.rotationDegrees)
-        val w = imageProxy.width.toFloat().coerceAtLeast(1f)
-        val h = imageProxy.height.toFloat().coerceAtLeast(1f)
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val image = InputImage.fromMediaImage(mediaImage, rotation)
+        val imgW = imageProxy.width.toFloat().coerceAtLeast(1f)
+        val imgH = imageProxy.height.toFloat().coerceAtLeast(1f)
 
         detector.process(image)
-            .addOnSuccessListener { objects ->
-                val boxes = objects.map { obj ->
-                    val box: RectF = RectF(obj.boundingBox)
-                    val label = obj.labels.firstOrNull()?.text ?: "object"
-                    val conf = obj.labels.firstOrNull()?.confidence ?: 0f
-                    DetectedObjectBox(
-                        left = (box.left / w).coerceIn(0f, 1f),
-                        top = (box.top / h).coerceIn(0f, 1f),
-                        right = (box.right / w).coerceIn(0f, 1f),
-                        bottom = (box.bottom / h).coerceIn(0f, 1f),
-                        label = label,
-                        confidence = conf
+            .addOnSuccessListener { detectedObjects: List<DetectedObject> ->
+                val boxes = ArrayList<DetectedObjectBox>(detectedObjects.size)
+                for (obj in detectedObjects) {
+                    val box: Rect = obj.boundingBox
+                    val labels = obj.labels
+                    val first = if (labels.isNotEmpty()) labels[0] else null
+                    val labelText = first?.text ?: "object"
+                    val conf = first?.confidence ?: 0f
+                    boxes.add(
+                        DetectedObjectBox(
+                            left = (box.left / imgW).coerceIn(0f, 1f),
+                            top = (box.top / imgH).coerceIn(0f, 1f),
+                            right = (box.right / imgW).coerceIn(0f, 1f),
+                            bottom = (box.bottom / imgH).coerceIn(0f, 1f),
+                            label = labelText,
+                            confidence = conf
+                        )
                     )
                 }
                 onResult(boxes)
+            }
+            .addOnFailureListener {
+                onResult(emptyList())
             }
             .addOnCompleteListener {
                 busy.set(false)
