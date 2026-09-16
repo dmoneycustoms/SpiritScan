@@ -11,8 +11,8 @@ android {
         applicationId = "com.nscb.spiritscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 83
-        versionName = "8.3.0"
+        versionCode = 84
+        versionName = "8.4.0"
     }
     buildTypes {
         release {
@@ -45,5 +45,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
+    // ML Kit object detection (on-device)
+    implementation("com.google.mlkit:object-detection:17.0.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
