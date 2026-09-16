@@ -2,6 +2,7 @@ package com.nscb.spiritscan.ui
 
 import android.view.ViewGroup
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -25,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,8 +64,12 @@ import com.nscb.spiritscan.ui.vision.HeatOverlay
 import com.nscb.spiritscan.ui.vision.JonesOverlay
 import com.nscb.spiritscan.ui.vision.MagOverlay
 import com.nscb.spiritscan.ui.vision.NightOverlay
+import com.nscb.spiritscan.ui.vision.ObjectOverlay
 import com.nscb.spiritscan.ui.vision.OmegaOverlay
 import com.nscb.spiritscan.ui.vision.UvOverlay
+import com.nscb.spiritscan.vision.DetectedObjectBox
+import com.nscb.spiritscan.vision.SpiritObjectDetector
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 private val Bg = Color(0xFF0B090B)
@@ -84,26 +90,21 @@ enum class FilterMode(val label: String) {
     JONES("JONES"),
     OMEGA("OMEGA"),
     NIGHT("NIGHT"),
-    RING("RING")
+    RING("RING"),
+    OBJ("OBJ")  // object detection boxes + residual plumes on objects
 }
 
-/** 0..1 strength for each filter from live model output */
 private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mode) {
-    FilterMode.CAM -> 0f
+    FilterMode.CAM, FilterMode.OBJ -> 0f
     FilterMode.HEAT -> (
         o.qida * 0.35f + o.residualLevel * 0.3f +
-            (abs(o.zMag) / 8f).coerceIn(0f, 1f) * 0.25f +
-            abs(o.survey.thermalDelta) / 4f * 0.1f
+            (abs(o.zMag) / 12f).coerceIn(0f, 1f) * 0.25f
         ).coerceIn(0f, 1f)
     FilterMode.UV -> (
-        (if (!o.sdeOk) 0.5f else 0f) +
-            (1f - o.sdeComposite.coerceIn(0f, 1f)) * 0.3f +
-            o.residualLevel * 0.2f
+        (if (!o.sdeOk) 0.5f else 0f) + o.residualLevel * 0.3f
         ).coerceIn(0f, 1f)
-    FilterMode.MAG -> (
-        (abs(o.zMag) / 6f).coerceIn(0f, 1f) * 0.55f +
-            (o.magUt / 70f).coerceIn(0f, 1f) * 0.45f
-        ).coerceIn(0f, 1f)
+    // MAG chip only glows when |B| is high (80+ scale)
+    FilterMode.MAG -> ((o.magUt - 55f) / 40f).coerceIn(0f, 1f)
     FilterMode.JONES -> o.jonesScore.coerceIn(0f, 1f)
     FilterMode.OMEGA -> (1f - o.omegaTrust.coerceIn(0f, 1f)).coerceIn(0f, 1f)
     FilterMode.NIGHT -> {
@@ -113,37 +114,40 @@ private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mod
     FilterMode.RING -> (o.qida * 0.5f + o.residualLevel * 0.5f).coerceIn(0f, 1f)
 }
 
-/** True when models say pay attention */
+/**
+ * Alerts are strict so normal house fields (~45–60 µT) do NOT fire.
+ * MAG path only alerts when |B| >= 80.
+ */
 private fun isAnomalyAlert(o: EntityOutput): Boolean {
     val label = o.jonesLabel.lowercase()
+    val highMag = o.magUt >= 80f
+    val extremeZ = abs(o.zMag) >= 10f
     return !o.sdeOk ||
-        abs(o.zMag) > 3.5f ||
-        o.residualLevel > 0.35f ||
-        o.qida > 0.45f ||
-        o.jonesScore > 0.55f ||
-        label.contains("interference") ||
-        label.contains("unclass") ||
-        label.contains("entity") ||
-        label.contains("candidate")
+        highMag ||
+        extremeZ ||
+        o.residualLevel > 0.55f ||
+        o.qida > 0.55f ||
+        (o.jonesScore > 0.7f && (label.contains("unclass") || label.contains("entity") || label.contains("candidate"))) ||
+        (label.contains("interference") && highMag)
 }
 
 private fun alertMessage(o: EntityOutput): String {
     val label = o.jonesLabel.lowercase()
     return when {
-        label.contains("interference") || label.contains("device") ->
-            "ALERT · DEVICE / MAINS — move off wiring"
+        o.magUt >= 80f ->
+            "ALERT · HIGH FIELD ${"%.0f".format(o.magUt)} µT"
+        abs(o.zMag) >= 10f ->
+            "ALERT · EXTREME Z ${"%.1f".format(o.zMag)}"
         !o.sdeOk ->
-            "ALERT · SDE FAIL — system integrity"
-        abs(o.zMag) > 5f ->
-            "ALERT · HIGH Z-MAG ${"%.1f".format(o.zMag)}"
-        o.residualLevel > 0.4f ->
+            "ALERT · SDE FAIL"
+        o.residualLevel > 0.55f ->
             "ALERT · RESIDUAL ${"%.2f".format(o.residualLevel)}"
-        o.qida > 0.5f ->
+        o.qida > 0.55f ->
             "ALERT · QIDA ${"%.2f".format(o.qida)}"
-        o.jonesScore > 0.55f ->
-            "ALERT · JONES ${o.jonesLabel}"
+        label.contains("unclass") || label.contains("entity") || label.contains("candidate") ->
+            "ALERT · ${o.jonesLabel}"
         else ->
-            "ALERT · ANOMALY — check models"
+            "ALERT · ANOMALY"
     }
 }
 
@@ -151,19 +155,31 @@ private fun alertMessage(o: EntityOutput): String {
 fun SpiritTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
-            background = Bg,
-            surface = Surface,
-            onBackground = Fg,
-            primary = Signal
+            background = Bg, surface = Surface, onBackground = Fg, primary = Signal
         ),
         content = content
     )
 }
 
 @Composable
-private fun CameraPreview(modifier: Modifier = Modifier) {
+private fun CameraWithDetection(
+    modifier: Modifier = Modifier,
+    onObjects: (List<DetectedObjectBox>) -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val detector = remember {
+        SpiritObjectDetector { boxes -> onObjects(boxes) }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            detector.close()
+            analysisExecutor.shutdown()
+        }
+    }
+
     val previewView = remember {
         PreviewView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -174,24 +190,30 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
-    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
 
     LaunchedEffect(Unit) {
         try {
-            val cameraProvider = cameraProviderFuture.get()
+            val cameraProvider = ProcessCameraProvider.getInstance(context).get()
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
+            val analysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { it.setAnalyzer(analysisExecutor, detector) }
+
             cameraProvider.unbindAll()
             cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 CameraSelector.DEFAULT_BACK_CAMERA,
-                preview
+                preview,
+                analysis
             )
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
+
     AndroidView(modifier = modifier, factory = { previewView }, update = { })
 }
 
@@ -209,6 +231,7 @@ fun LiveHud(vm: ScanViewModel) {
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
+    var objects by remember { mutableStateOf<List<DetectedObjectBox>>(emptyList()) }
 
     val alert = isAnomalyAlert(output)
     val pulse = rememberInfiniteTransition(label = "pulse")
@@ -228,7 +251,6 @@ fun LiveHud(vm: ScanViewModel) {
             .background(Bg)
             .padding(top = 28.dp)
     ) {
-        // ===== RED ALERT BAR =====
         if (alert) {
             Box(
                 Modifier
@@ -240,13 +262,11 @@ fun LiveHud(vm: ScanViewModel) {
                     alertMessage(output),
                     color = Color.White,
                     fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.align(Alignment.CenterStart)
+                    fontFamily = FontFamily.Monospace
                 )
             }
         }
 
-        // Title + FILTER chips that glow with anomaly strength
         Column(
             Modifier
                 .fillMaxWidth()
@@ -257,20 +277,14 @@ fun LiveHud(vm: ScanViewModel) {
             Spacer(Modifier.height(4.dp))
             Text("FILTER", color = Mute, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 FilterMode.entries.forEach { m ->
                     val strength = filterStrength(m, output)
                     val selected = filter == m
-                    // Glow: brighter + blink when this channel is hot
-                    val glow = if (strength > 0.25f) {
-                        0.4f + strength * 0.6f * blink
-                    } else {
-                        if (selected) 0.85f else 0.35f
-                    }
+                    val glow = if (strength > 0.25f) 0.4f + strength * 0.6f * blink
+                    else if (selected) 0.85f else 0.35f
                     val bg = when {
                         selected && strength > 0.35f -> Danger.copy(alpha = glow)
                         selected -> Signal.copy(alpha = 0.85f)
@@ -294,7 +308,6 @@ fun LiveHud(vm: ScanViewModel) {
             }
         }
 
-        // Camera 240dp
         Box(
             Modifier
                 .fillMaxWidth()
@@ -307,7 +320,11 @@ fun LiveHud(vm: ScanViewModel) {
                     shape = RoundedCornerShape(4.dp)
                 )
         ) {
-            CameraPreview(Modifier.fillMaxSize())
+            CameraWithDetection(
+                modifier = Modifier.fillMaxSize(),
+                onObjects = { objects = it }
+            )
+
             when (filter) {
                 FilterMode.CAM -> {}
                 FilterMode.HEAT -> HeatOverlay(output)
@@ -320,17 +337,22 @@ fun LiveHud(vm: ScanViewModel) {
                     val f = fusion
                     if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
                 }
+                FilterMode.OBJ -> {
+                    ObjectOverlay(boxes = objects, output = output, showPlumes = true)
+                }
             }
-            // Screen flash edge when alert
+
+            // Always show thin object boxes when objects found (optional aid)
+            if (filter != FilterMode.OBJ && objects.isNotEmpty()) {
+                ObjectOverlay(boxes = objects, output = output, showPlumes = false)
+            }
+
             if (alert) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Danger.copy(alpha = 0.08f * blink))
-                )
+                Box(Modifier.fillMaxSize().background(Danger.copy(alpha = 0.08f * blink)))
             }
+
             Text(
-                filter.label,
+                "${filter.label} · objs ${objects.size}",
                 color = Signal,
                 fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
@@ -342,7 +364,6 @@ fun LiveHud(vm: ScanViewModel) {
             )
         }
 
-        // Data scroll
         Column(
             Modifier
                 .fillMaxWidth()
@@ -361,9 +382,8 @@ fun LiveHud(vm: ScanViewModel) {
                 Text("MODEL OUTPUTS", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 Text(
                     "Jones ${output.jonesLabel} ${(output.jonesScore * 100).toInt()}%",
-                    color = if (output.jonesScore > 0.5f) Danger else Fg,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
+                    color = if (output.jonesScore > 0.7f) Danger else Fg,
+                    fontFamily = FontFamily.Monospace, fontSize = 12.sp
                 )
                 Text(
                     "QIDA ${"%.2f".format(output.qida)}  Om ${"%.2f".format(output.omegaTrust)}  SDE ${"%.2f".format(output.sdeComposite)}",
@@ -374,11 +394,10 @@ fun LiveHud(vm: ScanViewModel) {
                     color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
                 Text(
-                    if (output.calibrated) "baseline locked"
-                    else "IDLE — press ARM then CAL on the bottom bar",
+                    if (output.calibrated) "baseline locked  ·  MAG alert ≥ 80 µT"
+                    else "IDLE — press ARM then CAL",
                     color = if (output.calibrated) Signal else Danger,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp
+                    fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
             }
 
@@ -389,23 +408,21 @@ fun LiveHud(vm: ScanViewModel) {
                     .border(1.dp, Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
-                Text(
-                    "SITE  ${output.survey.activity.uppercase()}",
-                    color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp
-                )
+                Text("SITE  ${output.survey.activity.uppercase()}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 Text(output.survey.note, color = Mute, fontSize = 11.sp)
+                if (objects.isNotEmpty()) {
+                    Text(
+                        "OBJECTS  ${objects.joinToString { it.label }}",
+                        color = Signal, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                }
             }
 
             Row(Modifier.horizontalScroll(rememberScrollState())) {
                 Text("SWEEP ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 com.nscb.spiritscan.sensor.SweepMode.entries.forEach { m ->
                     TextButton(onClick = { vm.setSweep(m) }) {
-                        Text(
-                            m.name,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (sweep == m) Signal else Mute
-                        )
+                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (sweep == m) Signal else Mute)
                     }
                 }
             }
@@ -414,22 +431,13 @@ fun LiveHud(vm: ScanViewModel) {
                 Text("MODE ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 ScanMode.entries.forEach { m ->
                     TextButton(onClick = { vm.setMode(m) }) {
-                        Text(
-                            m.name,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = if (currentMode == m) Signal else Mute
-                        )
+                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (currentMode == m) Signal else Mute)
                     }
                 }
             }
 
             Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Card, RoundedCornerShape(8.dp))
-                    .border(1.dp, Border, RoundedCornerShape(8.dp))
-                    .padding(10.dp)
+                Modifier.fillMaxWidth().background(Card, RoundedCornerShape(8.dp)).border(1.dp, Border, RoundedCornerShape(8.dp)).padding(10.dp)
             ) {
                 when (currentMode) {
                     ScanMode.JONES -> JonesModeUI(output)
@@ -445,52 +453,29 @@ fun LiveHud(vm: ScanViewModel) {
             }
 
             Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Card, RoundedCornerShape(8.dp))
-                    .border(1.dp, Border, RoundedCornerShape(8.dp))
-                    .padding(10.dp)
+                Modifier.fillMaxWidth().background(Card, RoundedCornerShape(8.dp)).border(1.dp, Border, RoundedCornerShape(8.dp)).padding(10.dp)
             ) {
                 NSCBHud(hud)
                 NSCBDiagnostics(diag)
                 NSCBPerformanceOverlay(perf)
             }
-
             Spacer(Modifier.height(8.dp))
         }
 
-        // Bottom bar
         Row(
-            Modifier
-                .fillMaxWidth()
-                .background(Surface)
-                .padding(horizontal = 8.dp, vertical = 8.dp)
-                .navigationBarsPadding(),
+            Modifier.fillMaxWidth().background(Surface).padding(horizontal = 8.dp, vertical = 8.dp).navigationBarsPadding(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Button(
-                onClick = { vm.arm(ctx) },
-                modifier = Modifier.weight(1f).height(48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Signal)
-            ) { Text("ARM", fontSize = 14.sp) }
-
-            Button(
-                onClick = { vm.calibrate() },
-                modifier = Modifier.weight(1f).height(48.dp)
-            ) { Text("CAL", fontSize = 14.sp) }
-
-            Button(
-                onClick = { vm.toggleBox() },
-                modifier = Modifier.weight(1f).height(48.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (boxOn) Signal else ChipOff
-                )
-            ) { Text(if (boxOn) "BOX*" else "BOX", fontSize = 14.sp) }
-
-            Button(
-                onClick = { vm.toggleWalk() },
-                modifier = Modifier.weight(1f).height(48.dp)
-            ) { Text(if (walking) "STOP" else "WALK", fontSize = 14.sp) }
+            Button(onClick = { vm.arm(ctx) }, modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Signal)) { Text("ARM", fontSize = 14.sp) }
+            Button(onClick = { vm.calibrate() }, modifier = Modifier.weight(1f).height(48.dp)) { Text("CAL", fontSize = 14.sp) }
+            Button(onClick = { vm.toggleBox() }, modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (boxOn) Signal else ChipOff)) {
+                Text(if (boxOn) "BOX*" else "BOX", fontSize = 14.sp)
+            }
+            Button(onClick = { vm.toggleWalk() }, modifier = Modifier.weight(1f).height(48.dp)) {
+                Text(if (walking) "STOP" else "WALK", fontSize = 14.sp)
+            }
         }
     }
 }
