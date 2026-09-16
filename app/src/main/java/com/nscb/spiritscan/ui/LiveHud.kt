@@ -122,8 +122,6 @@ fun CameraPreview(
 
 /* ============================
    LIVE HUD — v8.3 full integration
-   Mode selector + camera stack with shader/ultra
-   overlays + HUD + 9 mode screens + diagnostics.
    ============================ */
 @Composable
 fun LiveHud(vm: ScanViewModel) {
@@ -142,8 +140,8 @@ fun LiveHud(vm: ScanViewModel) {
             .fillMaxSize()
             .background(Bg)
             .padding(16.dp)
-            .verticalScroll(rememberScrollState())
     ) {
+        // header
         Text(
             "NSCB v8.3",
             color = Mute,
@@ -198,7 +196,7 @@ fun LiveHud(vm: ScanViewModel) {
 
         Spacer(Modifier.height(8.dp))
 
-        // v8.3: scan mode selector
+        // scan mode selector
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -217,7 +215,7 @@ fun LiveHud(vm: ScanViewModel) {
 
         Spacer(Modifier.height(8.dp))
 
-        // camera stack: preview + shader + ultra grid/corners/ring
+        // camera stack: fixed
         Box(
             Modifier
                 .fillMaxWidth()
@@ -235,39 +233,47 @@ fun LiveHud(vm: ScanViewModel) {
 
         Spacer(Modifier.height(8.dp))
 
-        // tactical HUD
-        NSCBHud(hud)
+        // bottom panel: scrollable
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+        ) {
+            // tactical HUD
+            NSCBHud(hud)
 
-        Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(8.dp))
 
-        // mode router
-        when (currentMode) {
-            ScanMode.JONES -> JonesModeUI(output)
-            ScanMode.MAGNETIC -> MagneticModeUI(output)
-            ScanMode.QIDA -> QidaModeUI(output)
-            ScanMode.OMEGA -> OmegaModeUI(output)
-            ScanMode.SDE -> SdeModeUI(output)
-            ScanMode.RESIDUAL -> ResidualModeUI(output)
-            ScanMode.INTERFERENCE -> InterferenceModeUI(output)
-            ScanMode.SURVEY -> SurveyModeUI(output)
-            ScanMode.ENTITY -> EntityModeUI(output)
+            // mode router
+            when (currentMode) {
+                ScanMode.JONES -> JonesModeUI(output)
+                ScanMode.MAGNETIC -> MagneticModeUI(output)
+                ScanMode.QIDA -> QidaModeUI(output)
+                ScanMode.OMEGA -> OmegaModeUI(output)
+                ScanMode.SDE -> SdeModeUI(output)
+                ScanMode.RESIDUAL -> ResidualModeUI(output)
+                ScanMode.INTERFERENCE -> InterferenceModeUI(output)
+                ScanMode.SURVEY -> SurveyModeUI(output)
+                ScanMode.ENTITY -> EntityModeUI(output)
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // calibration status
+            Text(
+                if (output.calibrated)
+                    "baseline locked"
+                else
+                    "calibrating ${(output.calProgress * 100).toInt()}%",
+                color = Signal,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp
+            )
+
+            // diagnostics + performance overlays
+            NSCBDiagnostics(diag)
+            NSCBPerformanceOverlay(perf)
         }
-
-        Spacer(Modifier.height(8.dp))
-
-        // calibration status
-        Text(
-            if (output.calibrated)
-                "baseline locked"
-            else
-                "calibrating ${(output.calProgress * 100).toInt()}%",
-            color = Signal,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp
-        )
-
-        // diagnostics + performance overlays
-        NSCBDiagnostics(diag)
-        NSCBPerformanceOverlay(perf)
     }
 }
