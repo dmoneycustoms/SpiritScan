@@ -3,6 +3,7 @@ package com.nscb.spiritscan
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.DiagnosticsEngine
 import com.nscb.spiritscan.engines.DiagnosticsState
@@ -19,8 +20,10 @@ import com.nscb.spiritscan.sensor.SensorStreamManager
 import com.nscb.spiritscan.sensor.SpiritBox
 import com.nscb.spiritscan.sensor.SweepMode
 import com.nscb.spiritscan.ui.modes.ScanMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val appContext = app.applicationContext
@@ -75,30 +78,33 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             try { audioEngine = AudioEngine(appContext) } catch (_: Exception) {}
         }
         sensors = SensorStreamManager(ctx) { sample ->
-            val snap = sensors?.buffer?.snapshot().orEmpty()
-            val out = engine.process(
-                sample, snap, visResidual = visionResidual, audioRms = box.rms,
-                heading = sensors?.heading ?: 0f,
-                ambientC = sensors?.ambientC,
-                lux = sensors?.lux,
-                lumHot = 0.55f,
-                lumCold = 0.25f,
-            )
-            _output.value = out
+            // OFFLOAD heavy work off the main thread
+            viewModelScope.launch(Dispatchers.Default) {
+                val snap = sensors?.buffer?.snapshot().orEmpty()
+                val out = engine.process(
+                    sample, snap, visResidual = visionResidual, audioRms = box.rms,
+                    heading = sensors?.heading ?: 0f,
+                    ambientC = sensors?.ambientC,
+                    lux = sensors?.lux,
+                    lumHot = 0.55f,
+                    lumCold = 0.25f,
+                )
+                _output.value = out
 
-            // v8.3: fusion -> hud -> diagnostics -> performance -> audio
-            val t0 = System.nanoTime()
-            val fused = fusionEngine.fuse(out)
-            val fusionNs = System.nanoTime() - t0
-            _fusion.value = fused
-            _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
-            _diag.value = diagEngine.build(out, fused, fusionNs)
-            _perf.value = perfEngine.buildState(
-                frameSkip = 2,
-                shaderThrottle = 0.85f,
-                avgFrameMs = perfEngine.updateFrameTime(_diag.value?.frameMs ?: 0f)
-            )
-            try { audioEngine?.apply(out, fused) } catch (_: Exception) {}
+                // v8.3: fusion -> hud -> diagnostics -> performance -> audio
+                val t0 = System.nanoTime()
+                val fused = fusionEngine.fuse(out)
+                val fusionNs = System.nanoTime() - t0
+                _fusion.value = fused
+                _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
+                _diag.value = diagEngine.build(out, fused, fusionNs)
+                _perf.value = perfEngine.buildState(
+                    frameSkip = 2,
+                    shaderThrottle = 0.85f,
+                    avgFrameMs = perfEngine.updateFrameTime(_diag.value?.frameMs ?: 0f)
+                )
+                try { audioEngine?.apply(out, fused) } catch (_: Exception) {}
+            }
         }
         sensors?.start()
     }
@@ -136,7 +142,20 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun idle() = EntityOutput(
         "normal", 0f, 0f, 0f, 0.5f, true, 0.5f, 0f, false, 0f,
-        SurveySnap("quiet", 0f, "Arm sensors, calibrate 8 s, then walk the property.", 0f, 0f, 0f, null, null, 0f, emptyList(), 0f, 0f),
+        SurveySnap(
+            "quiet",
+            0f,
+            "Arm sensors, calibrate 8 s, then walk the property.",
+            0f,
+            0f,
+            0f,
+            null,
+            null,
+            0f,
+            emptyList(),
+            0f,
+            0f
+        ),
         "Standby.",
     )
 }
