@@ -47,7 +47,9 @@ fun CameraPipeline(
                     val preview = Preview.Builder()
                         .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                         .build()
-                        .also { it.surfaceProvider = previewView.surfaceProvider }
+                        .also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
 
                     val selector = CameraSelector.Builder()
                         .requireLensFacing(CameraSelector.LENS_FACING_BACK)
@@ -98,7 +100,6 @@ class FrameAnalyzer(
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)
 
-            // Downsample aggressively so we don't overwhelm the UI thread
             val step = (bytes.size / 4096).coerceAtLeast(1)
             val floats = FloatArray((bytes.size + step - 1) / step) { i ->
                 val idx = i * step
