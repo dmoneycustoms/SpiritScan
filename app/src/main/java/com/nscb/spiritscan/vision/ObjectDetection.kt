@@ -16,11 +16,14 @@ data class DetectedObjectBox(
     val right: Float,
     val bottom: Float,
     val label: String,
-    val confidence: Float
+    val confidence: Float,
+    val trackingId: Int = -1
 )
 
 /**
- * On-device ML Kit object detector for CameraX ImageAnalysis.
+ * ML Kit stream object detector.
+ * Default classifier only has coarse categories (Home/Fashion/Food/etc) —
+ * we map those to cleaner labels and always include a tracking id.
  */
 class SpiritObjectDetector(
     private val onResult: (List<DetectedObjectBox>) -> Unit
@@ -35,6 +38,24 @@ class SpiritObjectDetector(
     )
 
     private val busy = AtomicBoolean(false)
+
+    private fun cleanLabel(raw: String?, trackingId: Int?, conf: Float): String {
+        val id = trackingId?.toString() ?: "?"
+        if (raw.isNullOrBlank() || conf < 0.35f) {
+            return "obj #$id"
+        }
+        // ML Kit coarse categories → readable short names
+        val mapped = when {
+            raw.contains("Home", ignoreCase = true) -> "furniture"
+            raw.contains("Fashion", ignoreCase = true) -> "apparel"
+            raw.contains("Food", ignoreCase = true) -> "food"
+            raw.contains("Place", ignoreCase = true) -> "place"
+            raw.contains("plant", ignoreCase = true) -> "plant"
+            raw.contains("good", ignoreCase = true) -> "object"
+            else -> raw.lowercase().take(16)
+        }
+        return "$mapped #$id"
+    }
 
     @androidx.camera.core.ExperimentalGetImage
     override fun analyze(imageProxy: ImageProxy) {
@@ -62,8 +83,9 @@ class SpiritObjectDetector(
                     val box: Rect = obj.boundingBox
                     val labels = obj.labels
                     val first = if (labels.isNotEmpty()) labels[0] else null
-                    val labelText = first?.text ?: "object"
                     val conf = first?.confidence ?: 0f
+                    val tid = obj.trackingId ?: -1
+                    val labelText = cleanLabel(first?.text, obj.trackingId, conf)
                     boxes.add(
                         DetectedObjectBox(
                             left = (box.left / imgW).coerceIn(0f, 1f),
@@ -71,7 +93,8 @@ class SpiritObjectDetector(
                             right = (box.right / imgW).coerceIn(0f, 1f),
                             bottom = (box.bottom / imgH).coerceIn(0f, 1f),
                             label = labelText,
-                            confidence = conf
+                            confidence = conf,
+                            trackingId = tid
                         )
                     )
                 }
