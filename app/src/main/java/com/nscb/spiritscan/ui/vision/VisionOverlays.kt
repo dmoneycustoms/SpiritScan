@@ -70,7 +70,7 @@ fun HeatOverlay(output: EntityOutput) {
         ).coerceIn(0f, 1f)
 
     val particles = remember {
-        MutableList(48) {
+        MutableList(72) {
             Particle(
                 x = Random.nextFloat(),
                 y = Random.nextFloat(),
@@ -78,7 +78,7 @@ fun HeatOverlay(output: EntityOutput) {
                 vy = -0.05f - Random.nextFloat() * 0.12f,
                 life = Random.nextFloat(),
                 maxLife = 0.6f + Random.nextFloat() * 1.2f,
-                size = 2f + Random.nextFloat() * 6f,
+                size = 4f + Random.nextFloat() * 10f,
                 heat = Random.nextFloat()
             )
         }
@@ -111,7 +111,7 @@ fun HeatOverlay(output: EntityOutput) {
                         p.vy = -0.08f - Random.nextFloat() * 0.18f * (0.4f + e)
                         p.life = 1f
                         p.maxLife = 0.45f + Random.nextFloat() * (0.9f + e)
-                        p.size = 2f + Random.nextFloat() * (4f + e * 10f)
+                        p.size = 5f + Random.nextFloat() * (8f + e * 14f)
                         p.heat = 0.35f + e * 0.65f * Random.nextFloat()
                     } else {
                         p.life = 0f
@@ -175,21 +175,26 @@ fun HeatOverlay(output: EntityOutput) {
         // Particles — motion the eye may not resolve as “signal”
         for (p in particles) {
             if (p.life <= 0f) continue
-            val alpha = (p.life * (0.25f + energy * 0.75f)).coerceIn(0f, 0.85f)
+            val alpha = (p.life * (0.4f + energy * 0.6f)).coerceIn(0f, 0.95f)
             val px = p.x * w
             val py = p.y * h
-            val r = p.size * (0.6f + energy)
+            val r = p.size * (0.85f + energy * 0.5f)
+            // glow halo
+            drawCircle(
+                color = ironbow(p.heat * (0.5f + energy * 0.5f), alpha * 0.35f),
+                radius = r * 2.8f,
+                center = Offset(px, py)
+            )
             drawCircle(
                 color = ironbow(p.heat * (0.5f + energy * 0.5f), alpha),
                 radius = r,
                 center = Offset(px, py)
             )
-            // soft trail
-            if (energy > 0.2f) {
+            if (energy > 0.15f) {
                 drawCircle(
-                    color = ironbow(p.heat, alpha * 0.35f),
-                    radius = r * 2.2f,
-                    center = Offset(px, py + r)
+                    color = ironbow(p.heat, alpha * 0.45f),
+                    radius = r * 1.6f,
+                    center = Offset(px, py + r * 0.8f)
                 )
             }
         }
