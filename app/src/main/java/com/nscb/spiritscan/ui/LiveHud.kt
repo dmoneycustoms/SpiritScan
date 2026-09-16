@@ -5,6 +5,12 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -36,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nscb.spiritscan.ScanViewModel
+import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.ui.diagnostics.NSCBDiagnostics
 import com.nscb.spiritscan.ui.entity.EntityModeUI
 import com.nscb.spiritscan.ui.entity.UltraEntityRing
@@ -57,6 +64,7 @@ import com.nscb.spiritscan.ui.vision.MagOverlay
 import com.nscb.spiritscan.ui.vision.NightOverlay
 import com.nscb.spiritscan.ui.vision.OmegaOverlay
 import com.nscb.spiritscan.ui.vision.UvOverlay
+import kotlin.math.abs
 
 private val Bg = Color(0xFF0B090B)
 private val Surface = Color(0xFF12151A)
@@ -64,20 +72,79 @@ private val Card = Color(0xFF1A1E26)
 private val Fg = Color(0xFFE8EAED)
 private val Mute = Color(0xFF8B9196)
 private val Signal = Color(0xFF709A8E)
-private val Danger = Color(0xFFC47A72)
+private val Danger = Color(0xFFE85D4C)
 private val Border = Color(0xFF2A303A)
-private val ChipOn = Color(0xFF1E3A34)
 private val ChipOff = Color(0xFF22262E)
 
-enum class FilterMode(val label: String, val modelHint: String) {
-    CAM("CAM", "raw"),
-    HEAT("HEAT", "QIDA+residual"),
-    UV("UV", "SDE"),
-    MAG("MAG", "magnetometer"),
-    JONES("JONES", "Jones HV"),
-    OMEGA("OMEGA", "Omega trust"),
-    NIGHT("NIGHT", "lux+residual"),
-    RING("RING", "fusion")
+enum class FilterMode(val label: String) {
+    CAM("CAM"),
+    HEAT("HEAT"),
+    UV("UV"),
+    MAG("MAG"),
+    JONES("JONES"),
+    OMEGA("OMEGA"),
+    NIGHT("NIGHT"),
+    RING("RING")
+}
+
+/** 0..1 strength for each filter from live model output */
+private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mode) {
+    FilterMode.CAM -> 0f
+    FilterMode.HEAT -> (
+        o.qida * 0.35f + o.residualLevel * 0.3f +
+            (abs(o.zMag) / 8f).coerceIn(0f, 1f) * 0.25f +
+            abs(o.survey.thermalDelta) / 4f * 0.1f
+        ).coerceIn(0f, 1f)
+    FilterMode.UV -> (
+        (if (!o.sdeOk) 0.5f else 0f) +
+            (1f - o.sdeComposite.coerceIn(0f, 1f)) * 0.3f +
+            o.residualLevel * 0.2f
+        ).coerceIn(0f, 1f)
+    FilterMode.MAG -> (
+        (abs(o.zMag) / 6f).coerceIn(0f, 1f) * 0.55f +
+            (o.magUt / 70f).coerceIn(0f, 1f) * 0.45f
+        ).coerceIn(0f, 1f)
+    FilterMode.JONES -> o.jonesScore.coerceIn(0f, 1f)
+    FilterMode.OMEGA -> (1f - o.omegaTrust.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+    FilterMode.NIGHT -> {
+        val lux = o.survey.lux ?: 80f
+        ((1f - (lux / 180f).coerceIn(0f, 1f)) * 0.5f + o.residualLevel * 0.5f).coerceIn(0f, 1f)
+    }
+    FilterMode.RING -> (o.qida * 0.5f + o.residualLevel * 0.5f).coerceIn(0f, 1f)
+}
+
+/** True when models say pay attention */
+private fun isAnomalyAlert(o: EntityOutput): Boolean {
+    val label = o.jonesLabel.lowercase()
+    return !o.sdeOk ||
+        abs(o.zMag) > 3.5f ||
+        o.residualLevel > 0.35f ||
+        o.qida > 0.45f ||
+        o.jonesScore > 0.55f ||
+        label.contains("interference") ||
+        label.contains("unclass") ||
+        label.contains("entity") ||
+        label.contains("candidate")
+}
+
+private fun alertMessage(o: EntityOutput): String {
+    val label = o.jonesLabel.lowercase()
+    return when {
+        label.contains("interference") || label.contains("device") ->
+            "ALERT · DEVICE / MAINS — move off wiring"
+        !o.sdeOk ->
+            "ALERT · SDE FAIL — system integrity"
+        abs(o.zMag) > 5f ->
+            "ALERT · HIGH Z-MAG ${"%.1f".format(o.zMag)}"
+        o.residualLevel > 0.4f ->
+            "ALERT · RESIDUAL ${"%.2f".format(o.residualLevel)}"
+        o.qida > 0.5f ->
+            "ALERT · QIDA ${"%.2f".format(o.qida)}"
+        o.jonesScore > 0.55f ->
+            "ALERT · JONES ${o.jonesLabel}"
+        else ->
+            "ALERT · ANOMALY — check models"
+    }
 }
 
 @Composable
@@ -125,11 +192,7 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
             e.printStackTrace()
         }
     }
-    AndroidView(
-        modifier = modifier,
-        factory = { previewView },
-        update = { }
-    )
+    AndroidView(modifier = modifier, factory = { previewView }, update = { })
 }
 
 @Composable
@@ -147,13 +210,43 @@ fun LiveHud(vm: ScanViewModel) {
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
 
+    val alert = isAnomalyAlert(output)
+    val pulse = rememberInfiniteTransition(label = "pulse")
+    val blink by pulse.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "blink"
+    )
+
     Column(
         Modifier
             .fillMaxSize()
             .background(Bg)
-            .padding(top = 28.dp) // clear status bar without relying on systemBarsPadding
+            .padding(top = 28.dp)
     ) {
-        // Title + FILTER (top, fixed)
+        // ===== RED ALERT BAR =====
+        if (alert) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Danger.copy(alpha = 0.25f + blink * 0.55f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    alertMessage(output),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                )
+            }
+        }
+
+        // Title + FILTER chips that glow with anomaly strength
         Column(
             Modifier
                 .fillMaxWidth()
@@ -170,13 +263,28 @@ fun LiveHud(vm: ScanViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 FilterMode.entries.forEach { m ->
+                    val strength = filterStrength(m, output)
+                    val selected = filter == m
+                    // Glow: brighter + blink when this channel is hot
+                    val glow = if (strength > 0.25f) {
+                        0.4f + strength * 0.6f * blink
+                    } else {
+                        if (selected) 0.85f else 0.35f
+                    }
+                    val bg = when {
+                        selected && strength > 0.35f -> Danger.copy(alpha = glow)
+                        selected -> Signal.copy(alpha = 0.85f)
+                        strength > 0.35f -> Danger.copy(alpha = glow * 0.7f)
+                        strength > 0.15f -> Signal.copy(alpha = 0.35f + strength * 0.4f)
+                        else -> ChipOff
+                    }
                     Button(
                         onClick = { filter = m },
                         modifier = Modifier.height(32.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (filter == m) ChipOn else ChipOff,
-                            contentColor = if (filter == m) Signal else Mute
+                            containerColor = bg,
+                            contentColor = if (strength > 0.3f || selected) Color.White else Mute
                         ),
                         shape = RoundedCornerShape(6.dp)
                     ) {
@@ -186,14 +294,18 @@ fun LiveHud(vm: ScanViewModel) {
             }
         }
 
-        // SMALL camera — hard max height, clipped
+        // Camera 240dp
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(240.dp)
                 .padding(horizontal = 8.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .border(1.dp, Border, RoundedCornerShape(4.dp))
+                .border(
+                    width = if (alert) 2.dp else 1.dp,
+                    color = if (alert) Danger.copy(alpha = blink) else Border,
+                    shape = RoundedCornerShape(4.dp)
+                )
         ) {
             CameraPreview(Modifier.fillMaxSize())
             when (filter) {
@@ -209,8 +321,16 @@ fun LiveHud(vm: ScanViewModel) {
                     if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
                 }
             }
+            // Screen flash edge when alert
+            if (alert) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Danger.copy(alpha = 0.08f * blink))
+                )
+            }
             Text(
-                "${filter.label}",
+                filter.label,
                 color = Signal,
                 fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
@@ -222,7 +342,7 @@ fun LiveHud(vm: ScanViewModel) {
             )
         }
 
-        // Scrollable data
+        // Data scroll
         Column(
             Modifier
                 .fillMaxWidth()
@@ -235,13 +355,15 @@ fun LiveHud(vm: ScanViewModel) {
                 Modifier
                     .fillMaxWidth()
                     .background(Card, RoundedCornerShape(8.dp))
-                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .border(1.dp, if (alert) Danger.copy(alpha = 0.5f) else Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
                 Text("MODEL OUTPUTS", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 Text(
                     "Jones ${output.jonesLabel} ${(output.jonesScore * 100).toInt()}%",
-                    color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp
+                    color = if (output.jonesScore > 0.5f) Danger else Fg,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp
                 )
                 Text(
                     "QIDA ${"%.2f".format(output.qida)}  Om ${"%.2f".format(output.omegaTrust)}  SDE ${"%.2f".format(output.sdeComposite)}",
@@ -267,7 +389,10 @@ fun LiveHud(vm: ScanViewModel) {
                     .border(1.dp, Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
-                Text("SITE  ${output.survey.activity.uppercase()}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Text(
+                    "SITE  ${output.survey.activity.uppercase()}",
+                    color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp
+                )
                 Text(output.survey.note, color = Mute, fontSize = 11.sp)
             }
 
@@ -275,7 +400,12 @@ fun LiveHud(vm: ScanViewModel) {
                 Text("SWEEP ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 com.nscb.spiritscan.sensor.SweepMode.entries.forEach { m ->
                     TextButton(onClick = { vm.setSweep(m) }) {
-                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (sweep == m) Signal else Mute)
+                        Text(
+                            m.name,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (sweep == m) Signal else Mute
+                        )
                     }
                 }
             }
@@ -284,7 +414,12 @@ fun LiveHud(vm: ScanViewModel) {
                 Text("MODE ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 ScanMode.entries.forEach { m ->
                     TextButton(onClick = { vm.setMode(m) }) {
-                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (currentMode == m) Signal else Mute)
+                        Text(
+                            m.name,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (currentMode == m) Signal else Mute
+                        )
                     }
                 }
             }
@@ -324,7 +459,7 @@ fun LiveHud(vm: ScanViewModel) {
             Spacer(Modifier.height(8.dp))
         }
 
-        // ========== FIXED BOTTOM BAR — ARM / CAL / BOX / WALK always here ==========
+        // Bottom bar
         Row(
             Modifier
                 .fillMaxWidth()
