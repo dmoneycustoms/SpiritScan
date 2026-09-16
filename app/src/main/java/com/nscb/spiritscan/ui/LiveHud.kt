@@ -122,13 +122,14 @@ private fun isAnomalyAlert(o: EntityOutput): Boolean {
     val label = o.jonesLabel.lowercase()
     val highMag = o.magUt >= 80f
     val extremeZ = abs(o.zMag) >= 10f
-    return !o.sdeOk ||
-        highMag ||
+    // SDE fail alone is common near wiring — do NOT alert on it by itself
+    return highMag ||
         extremeZ ||
         o.residualLevel > 0.55f ||
         o.qida > 0.55f ||
         (o.jonesScore > 0.7f && (label.contains("unclass") || label.contains("entity") || label.contains("candidate"))) ||
-        (label.contains("interference") && highMag)
+        (label.contains("interference") && highMag) ||
+        (!o.sdeOk && o.residualLevel > 0.4f && highMag)
 }
 
 private fun alertMessage(o: EntityOutput): String {
@@ -138,14 +139,14 @@ private fun alertMessage(o: EntityOutput): String {
             "ALERT · HIGH FIELD ${"%.0f".format(o.magUt)} µT"
         abs(o.zMag) >= 10f ->
             "ALERT · EXTREME Z ${"%.1f".format(o.zMag)}"
-        !o.sdeOk ->
-            "ALERT · SDE FAIL"
         o.residualLevel > 0.55f ->
             "ALERT · RESIDUAL ${"%.2f".format(o.residualLevel)}"
         o.qida > 0.55f ->
             "ALERT · QIDA ${"%.2f".format(o.qida)}"
         label.contains("unclass") || label.contains("entity") || label.contains("candidate") ->
             "ALERT · ${o.jonesLabel}"
+        !o.sdeOk && o.magUt >= 80f ->
+            "ALERT · SDE + HIGH FIELD"
         else ->
             "ALERT · ANOMALY"
     }
