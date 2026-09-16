@@ -190,7 +190,7 @@ fun LiveHud(vm: ScanViewModel) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(120.dp)
+                .height(240.dp)
                 .padding(horizontal = 8.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .border(1.dp, Border, RoundedCornerShape(4.dp))
