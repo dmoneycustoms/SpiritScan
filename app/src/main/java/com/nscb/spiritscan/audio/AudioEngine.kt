@@ -8,24 +8,30 @@ import com.nscb.spiritscan.engines.FusionState
 import com.nscb.spiritscan.entity.EntityOutput
 import kotlin.math.sin
 
-/* ============================
-   AUDIO FX ENGINE (v8.3 update)
-   QIDA pulse tone, SDE distortion, Omega hum,
-   magnetic tick, interference alarm, composite mixer.
-   ============================ */
+/**
+ * Quiet, event-based sonification.
+ * Default volume is very low so SpiritBox remains audible.
+ * Continuous multi-tone spam is disabled.
+ */
 class AudioEngine(context: Context) {
 
-    private val sampleRate = 44100
+    // Master volume 0..1 — keep low so spirit box can be heard
+    var masterVolume: Float = 0.06f
+
+    // Set true only if user explicitly enables engine tones
+    var enabled: Boolean = false
+
+    private val sampleRate = 22050
     private val bufferSize = AudioTrack.getMinBufferSize(
         sampleRate,
         AudioFormat.CHANNEL_OUT_MONO,
         AudioFormat.ENCODING_PCM_16BIT
     )
 
-    private val track = AudioTrack.Builder()
+    private val track: AudioTrack = AudioTrack.Builder()
         .setAudioAttributes(
             AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
         )
@@ -36,68 +42,72 @@ class AudioEngine(context: Context) {
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .build()
         )
-        .setBufferSizeInBytes(bufferSize)
+        .setBufferSizeInBytes(bufferSize * 2)
         .setTransferMode(AudioTrack.MODE_STREAM)
         .build()
 
+    private var lastPlayMs = 0L
+    private val minIntervalMs = 400L
+
     init {
-        track.play()
+        try {
+            track.play()
+        } catch (_: Exception) {
+        }
     }
 
-    private fun tone(freq: Float, amp: Float): ShortArray {
-        val buf = ShortArray(256)
+    private fun tone(freq: Float, amp: Float, samples: Int = 512): ShortArray {
+        val a = (amp * masterVolume).coerceIn(0f, 0.25f)
+        val buf = ShortArray(samples)
         for (i in buf.indices) {
-            val v = sin(2.0 * Math.PI * freq * i / sampleRate) * amp
+            val v = sin(2.0 * Math.PI * freq * i / sampleRate) * a
             buf[i] = (v * Short.MAX_VALUE).toInt().toShort()
         }
         return buf
     }
 
-    fun playQida(qida: Float) {
-        val freq = 220f + (qida * 440f)
-        val amp = qida.coerceIn(0f, 1f)
-        track.write(tone(freq, amp), 0, 256)
+    private fun canPlay(): Boolean {
+        if (!enabled) return false
+        val now = System.currentTimeMillis()
+        if (now - lastPlayMs < minIntervalMs) return false
+        lastPlayMs = now
+        return true
     }
 
-    fun playSde(sde: Float) {
-        val freq = 80f + (sde * 120f)
-        val amp = (sde * 0.6f).coerceIn(0f, 1f)
-        track.write(tone(freq, amp), 0, 256)
-    }
-
-    fun playOmega(omega: Float) {
-        val freq = 40f + (omega * 60f)
-        val amp = (omega * 0.4f).coerceIn(0f, 1f)
-        track.write(tone(freq, amp), 0, 256)
-    }
-
-    fun playMag(mag: Float) {
-        val freq = 10f + ((mag / 60f).coerceIn(0f, 1f) * 40f)
-        val amp = ((mag / 60f).coerceIn(0f, 1f) * 0.3f)
-        track.write(tone(freq, amp), 0, 256)
-    }
-
+    /** Short interference chirp only when interference is active. */
     fun playInterference(active: Boolean) {
-        if (!active) return
-        track.write(tone(880f, 0.7f), 0, 256)
+        if (!active || !canPlay()) return
+        try {
+            track.write(tone(660f, 0.35f, 384), 0, 384)
+        } catch (_: Exception) {
+        }
     }
 
+    /** Optional short composite tick (rate-limited). */
     fun playComposite(c: Float) {
-        val freq = 120f + (c * 300f)
-        val amp = (c * 0.5f).coerceIn(0f, 1f)
-        track.write(tone(freq, amp), 0, 256)
+        if (c < 0.55f || !canPlay()) return
+        try {
+            track.write(tone(180f + c * 120f, 0.2f, 256), 0, 256)
+        } catch (_: Exception) {
+        }
     }
 
+    /**
+     * Called every sensor tick.
+     * By default does almost nothing so SpiritBox stays clear.
+     * Enable with audioEngine.enabled = true if you want soft cues.
+     */
     fun apply(output: EntityOutput, fusion: FusionState) {
-        playQida(output.qida)
-        playSde(output.sdeComposite)
-        playOmega(output.omegaTrust)
-        playMag(output.magUt)
+        if (!enabled) return
+        // Only interference cue — no continuous multi-tone layer
         playInterference(!output.sdeOk)
-        playComposite(fusion.composite)
     }
 
     fun release() {
-        try { track.stop(); track.release() } catch (_: Exception) {}
+        try {
+            track.stop()
+            track.release()
+        } catch (_: Exception) {
+        }
     }
 }
