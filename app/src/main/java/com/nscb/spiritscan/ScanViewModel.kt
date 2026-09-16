@@ -92,8 +92,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        // single processing gate to avoid flooding coroutines
+        var processing = false
+
         sensors = SensorStreamManager(ctx) { sample ->
-            // OFFLOAD ARM PIPELINE TO BACKGROUND THREAD
+            if (processing) return@SensorStreamManager
+            processing = true
+
             viewModelScope.launch(Dispatchers.Default) {
                 try {
                     val snap = sensors?.buffer?.snapshot().orEmpty()
@@ -114,7 +119,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     val fused = fusionEngine.fuse(out)
                     val fusionNs = System.nanoTime() - t0
 
-                    // UI STATE UPDATES ON MAIN THREAD
+                    // UI state updates on main thread
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
@@ -132,7 +137,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (_: Exception) {
                     }
                 } catch (_: Exception) {
-                    // keep app from closing on ARM crash
+                    // swallow to keep ARM from killing app
+                } finally {
+                    processing = false
                 }
             }
         }
