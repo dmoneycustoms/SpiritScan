@@ -17,6 +17,9 @@ class SpiritBox {
     private var track: AudioTrack? = null
     private var worker: Thread? = null
 
+    // Peak amplitude scale (0..32767). 5500 ≈ quiet enough to not drown the room.
+    private val amplitude = 5500
+
     fun start() {
         if (on) return
         on = true
@@ -60,11 +63,11 @@ class SpiritBox {
                         b0 = 0.99886 * b0 + w * 0.0555179
                         b1 = 0.99332 * b1 + w * 0.0750759
                         b2 = 0.969 * b2 + w * 0.153852
-                        (b0 + b1 + b2 + w * 0.1848) * 0.3
-                    } else w * 0.35
+                        (b0 + b1 + b2 + w * 0.1848) * 0.25
+                    } else w * 0.28
                     phase += 2 * Math.PI * hop / sr
-                    val v = (noise + 0.12 * sin(phase)).coerceIn(-1.0, 1.0)
-                    buf[i] = (v * 8000).toInt().toShort()
+                    val v = (noise + 0.10 * sin(phase)).coerceIn(-1.0, 1.0)
+                    buf[i] = (v * amplitude).toInt().toShort()
                     e += v * v
                 }
                 rms = kotlin.math.sqrt(e / buf.size).toFloat()
@@ -76,7 +79,11 @@ class SpiritBox {
     fun stop() {
         on = false
         worker = null
-        try { track?.stop(); track?.release() } catch (_: Exception) {}
+        try {
+            track?.stop()
+            track?.release()
+        } catch (_: Exception) {
+        }
         track = null
         rms = 0f
     }
