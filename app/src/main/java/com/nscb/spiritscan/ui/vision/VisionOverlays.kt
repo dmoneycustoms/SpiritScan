@@ -3,6 +3,12 @@ package com.nscb.spiritscan.ui.vision
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -11,10 +17,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import com.nscb.spiritscan.entity.EntityOutput
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.random.Random
 
 /**
- * Filter overlays driven by ONNX/kernel model outputs.
- * Intensity scales with unusual readings so visuals match the data.
+ * Stronger software vision layers.
+ * HEAT: particles + plumes driven by residual / QIDA / z-mag / thermal.
+ * Not real IR — visualizes what the models measure that eyes may not see.
  */
 
 private fun ironbow(t: Float, alpha: Float = 0.5f): Color {
@@ -39,78 +47,188 @@ private fun ironbow(t: Float, alpha: Float = 0.5f): Color {
     return Color(r.coerceIn(0f, 1f), g.coerceIn(0f, 1f), b.coerceIn(0f, 1f), alpha)
 }
 
-/** HEAT — QIDA residual + residualLevel + thermal (Jones residual path) */
+private data class Particle(
+    var x: Float,
+    var y: Float,
+    var vx: Float,
+    var vy: Float,
+    var life: Float,
+    var maxLife: Float,
+    var size: Float,
+    var heat: Float
+)
+
 @Composable
 fun HeatOverlay(output: EntityOutput) {
-    val unusual = (
-        output.qida * 0.4f +
-            output.residualLevel * 0.35f +
-            abs(output.survey.thermalDelta) / 4f * 0.15f +
-            output.jonesScore * 0.1f
+    // Model-driven “unusual” energy 0..1
+    val energy = (
+        output.qida * 0.35f +
+            output.residualLevel * 0.30f +
+            (abs(output.zMag) / 8f).coerceIn(0f, 1f) * 0.20f +
+            abs(output.survey.thermalDelta) / 4f * 0.10f +
+            output.jonesScore * 0.05f
         ).coerceIn(0f, 1f)
 
-    Canvas(Modifier.fillMaxSize()) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val maxR = min(size.width, size.height) * 0.48f
+    val particles = remember {
+        MutableList(48) {
+            Particle(
+                x = Random.nextFloat(),
+                y = Random.nextFloat(),
+                vx = (Random.nextFloat() - 0.5f) * 0.15f,
+                vy = -0.05f - Random.nextFloat() * 0.12f,
+                life = Random.nextFloat(),
+                maxLife = 0.6f + Random.nextFloat() * 1.2f,
+                size = 2f + Random.nextFloat() * 6f,
+                heat = Random.nextFloat()
+            )
+        }
+    }
 
-        // Align grid-like 8x divisions with camera box
-        val stepX = size.width / 8f
-        val stepY = size.height / 8f
+    // Frame tick forces Canvas redraw
+    var frame by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos { nanos ->
+                frame = (nanos % 1_000_000_000L) / 1_000_000_000f
+            }
+            val dt = 0.016f
+            val e = energy
+            val spawnBoost = 0.35f + e * 1.5f
+            for (p in particles) {
+                p.life -= dt / p.maxLife
+                p.x += p.vx * dt * (0.5f + e)
+                p.y += p.vy * dt * (0.5f + e)
+                val cx = 0.5f
+                val cy = 0.45f
+                p.vx += (cx - p.x) * 0.08f * e * dt
+                p.vy += (cy - p.y) * 0.05f * e * dt - 0.025f * e * dt
+                if (p.life <= 0f || p.y < -0.05f || p.x < -0.1f || p.x > 1.1f) {
+                    if (Random.nextFloat() < spawnBoost) {
+                        p.x = 0.15f + Random.nextFloat() * 0.7f
+                        p.y = 0.65f + Random.nextFloat() * 0.4f
+                        p.vx = (Random.nextFloat() - 0.5f) * 0.22f
+                        p.vy = -0.08f - Random.nextFloat() * 0.18f * (0.4f + e)
+                        p.life = 1f
+                        p.maxLife = 0.45f + Random.nextFloat() * (0.9f + e)
+                        p.size = 2f + Random.nextFloat() * (4f + e * 10f)
+                        p.heat = 0.35f + e * 0.65f * Random.nextFloat()
+                    } else {
+                        p.life = 0f
+                    }
+                }
+            }
+        }
+    }
+
+    // Read frame so Compose tracks it for redraw
+    val _tick = frame
+
+    Canvas(Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val cx = w / 2f
+        val cy = h * 0.42f
+        val maxR = min(w, h) * (0.25f + energy * 0.35f)
+
+        // 8x grid aligned to camera box
+        val stepX = w / 8f
+        val stepY = h / 8f
         for (i in 1 until 8) {
-            drawLine(Color(0x33FFFFFF), Offset(i * stepX, 0f), Offset(i * stepX, size.height), 1f)
-            drawLine(Color(0x33FFFFFF), Offset(0f, i * stepY), Offset(size.width, i * stepY), 1f)
+            drawLine(Color(0x22FFFFFF), Offset(i * stepX, 0f), Offset(i * stepX, h), 1f)
+            drawLine(Color(0x22FFFFFF), Offset(0f, i * stepY), Offset(w, i * stepY), 1f)
         }
 
-        drawRect(ironbow(unusual * 0.45f, 0.35f))
-        drawCircle(
-            brush = Brush.radialGradient(
-                listOf(
-                    ironbow((unusual + 0.3f).coerceIn(0f, 1f), 0.65f),
-                    ironbow(unusual, 0.3f),
-                    Color.Transparent
-                ),
-                center = Offset(cx, cy),
-                radius = maxR
-            ),
-            radius = maxR,
-            center = Offset(cx, cy)
-        )
-        if (unusual > 0.35f) {
+        // Soft heat wash
+        drawRect(ironbow(energy * 0.35f, 0.22f + energy * 0.15f))
+
+        // Central plume (forms when models read residual)
+        if (energy > 0.08f) {
             drawCircle(
-                ironbow(0.95f, 0.55f),
-                radius = 18f + unusual * 40f,
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        ironbow((energy + 0.4f).coerceIn(0f, 1f), 0.55f),
+                        ironbow(energy, 0.28f),
+                        Color.Transparent
+                    ),
+                    center = Offset(cx, cy),
+                    radius = maxR
+                ),
+                radius = maxR,
+                center = Offset(cx, cy)
+            )
+            // rising secondary plume
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        ironbow((energy + 0.25f).coerceIn(0f, 1f), 0.35f),
+                        Color.Transparent
+                    ),
+                    center = Offset(cx, cy - maxR * 0.35f),
+                    radius = maxR * 0.55f
+                ),
+                radius = maxR * 0.55f,
+                center = Offset(cx, cy - maxR * 0.35f)
+            )
+        }
+
+        // Particles — motion the eye may not resolve as “signal”
+        for (p in particles) {
+            if (p.life <= 0f) continue
+            val alpha = (p.life * (0.25f + energy * 0.75f)).coerceIn(0f, 0.85f)
+            val px = p.x * w
+            val py = p.y * h
+            val r = p.size * (0.6f + energy)
+            drawCircle(
+                color = ironbow(p.heat * (0.5f + energy * 0.5f), alpha),
+                radius = r,
+                center = Offset(px, py)
+            )
+            // soft trail
+            if (energy > 0.2f) {
+                drawCircle(
+                    color = ironbow(p.heat, alpha * 0.35f),
+                    radius = r * 2.2f,
+                    center = Offset(px, py + r)
+                )
+            }
+        }
+
+        // Hot core ring when residual spikes
+        if (energy > 0.35f) {
+            drawCircle(
+                color = ironbow(0.95f, 0.4f + energy * 0.3f),
+                radius = 14f + energy * 36f,
                 center = Offset(cx, cy),
-                style = Stroke(2.5f)
+                style = Stroke(width = 2f + energy * 2f)
             )
         }
     }
 }
 
-/** UV — SDE instability + residual (system integrity path) */
 @Composable
 fun UvOverlay(output: EntityOutput) {
-    val unusual = (
-        (if (!output.sdeOk) 0.45f else 0f) +
+    val energy = (
+        (if (!output.sdeOk) 0.4f else 0f) +
             (1f - output.sdeComposite.coerceIn(0f, 1f)) * 0.25f +
-            output.residualLevel * 0.3f
+            output.residualLevel * 0.35f
         ).coerceIn(0f, 1f)
 
     Canvas(Modifier.fillMaxSize()) {
         val cx = size.width / 2f
         val cy = size.height / 2f
-        val maxR = min(size.width, size.height) * 0.5f
+        val maxR = min(size.width, size.height) * (0.3f + energy * 0.35f)
         val stepX = size.width / 8f
         val stepY = size.height / 8f
         for (i in 1 until 8) {
             drawLine(Color(0x44AA88FF), Offset(i * stepX, 0f), Offset(i * stepX, size.height), 1f)
             drawLine(Color(0x44AA88FF), Offset(0f, i * stepY), Offset(size.width, i * stepY), 1f)
         }
-        val c = Color(0.2f + unusual * 0.3f, 0.1f + unusual * 0.2f, 0.55f + unusual * 0.4f, 0.35f + unusual * 0.25f)
-        drawRect(c.copy(alpha = 0.3f))
+        val c = Color(0.25f + energy * 0.3f, 0.1f + energy * 0.15f, 0.55f + energy * 0.4f, 0.3f + energy * 0.3f)
+        drawRect(c.copy(alpha = 0.25f))
         drawCircle(
             brush = Brush.radialGradient(
-                listOf(c, c.copy(alpha = 0.2f), Color.Transparent),
+                listOf(c, c.copy(alpha = 0.15f), Color.Transparent),
                 center = Offset(cx, cy),
                 radius = maxR
             ),
@@ -120,11 +238,10 @@ fun UvOverlay(output: EntityOutput) {
     }
 }
 
-/** MAG — magnetometer |B| + z-score (magnetic kernel path) */
 @Composable
 fun MagOverlay(output: EntityOutput) {
-    val unusual = (
-        (abs(output.zMag) / 5f).coerceIn(0f, 1f) * 0.55f +
+    val energy = (
+        (abs(output.zMag) / 6f).coerceIn(0f, 1f) * 0.55f +
             (output.magUt / 70f).coerceIn(0f, 1f) * 0.45f
         ).coerceIn(0f, 1f)
 
@@ -138,30 +255,29 @@ fun MagOverlay(output: EntityOutput) {
             drawLine(Color(0x3300E5FF), Offset(i * stepX, 0f), Offset(i * stepX, size.height), 1f)
             drawLine(Color(0x3300E5FF), Offset(0f, i * stepY), Offset(size.width, i * stepY), 1f)
         }
-        drawRect(Color(0.05f, 0.25f + unusual * 0.3f, 0.35f, 0.28f))
+        drawRect(Color(0.05f, 0.2f + energy * 0.3f, 0.35f, 0.25f + energy * 0.15f))
         for (i in 1..5) {
             drawCircle(
-                Color(0f, 0.7f, 0.85f, 0.12f + unusual * 0.1f),
+                Color(0f, 0.7f, 0.85f, 0.1f + energy * 0.12f),
                 radius = maxR * (i / 5f),
                 center = Offset(cx, cy),
                 style = Stroke(1.5f)
             )
         }
-        if (unusual > 0.3f) {
+        if (energy > 0.25f) {
             drawCircle(
-                Color(0f, 1f, 0.9f, 0.45f),
-                radius = 12f + unusual * 35f,
+                Color(0f, 1f, 0.9f, 0.35f + energy * 0.3f),
+                radius = 10f + energy * 40f,
                 center = Offset(cx, cy)
             )
         }
     }
 }
 
-/** NIGHT — lux + residual (low-signal path) */
 @Composable
 fun NightOverlay(output: EntityOutput) {
     val lux = output.survey.lux ?: 80f
-    val unusual = (
+    val energy = (
         (1f - (lux / 180f).coerceIn(0f, 1f)) * 0.5f +
             output.residualLevel * 0.5f
         ).coerceIn(0f, 1f)
@@ -175,19 +291,18 @@ fun NightOverlay(output: EntityOutput) {
             drawLine(Color(0x2200FF44), Offset(i * stepX, 0f), Offset(i * stepX, size.height), 1f)
             drawLine(Color(0x2200FF44), Offset(0f, i * stepY), Offset(size.width, i * stepY), 1f)
         }
-        drawRect(Color(0f, 0.06f + unusual * 0.1f, 0.02f, 0.42f))
+        drawRect(Color(0f, 0.06f + energy * 0.1f, 0.02f, 0.4f))
         drawCircle(
-            Color(0.1f, 0.85f, 0.25f, 0.2f + unusual * 0.25f),
-            radius = min(size.width, size.height) * 0.3f,
+            Color(0.1f, 0.85f, 0.25f, 0.15f + energy * 0.3f),
+            radius = min(size.width, size.height) * (0.25f + energy * 0.15f),
             center = Offset(cx, cy)
         )
     }
 }
 
-/** JONES — classifier score highlight */
 @Composable
 fun JonesOverlay(output: EntityOutput) {
-    val unusual = output.jonesScore.coerceIn(0f, 1f)
+    val energy = output.jonesScore.coerceIn(0f, 1f)
     Canvas(Modifier.fillMaxSize()) {
         val cx = size.width / 2f
         val cy = size.height / 2f
@@ -197,20 +312,19 @@ fun JonesOverlay(output: EntityOutput) {
             drawLine(Color(0x3300FFAA), Offset(i * stepX, 0f), Offset(i * stepX, size.height), 1f)
             drawLine(Color(0x3300FFAA), Offset(0f, i * stepY), Offset(size.width, i * stepY), 1f)
         }
-        drawRect(Color(0f, 0.3f, 0.2f, 0.2f + unusual * 0.2f))
+        drawRect(Color(0f, 0.25f, 0.18f, 0.18f + energy * 0.22f))
         drawCircle(
-            Color(0f, 1f, 0.65f, 0.25f + unusual * 0.4f),
-            radius = 20f + unusual * 55f,
+            Color(0f, 1f, 0.65f, 0.2f + energy * 0.45f),
+            radius = 18f + energy * 55f,
             center = Offset(cx, cy),
-            style = Stroke(2f + unusual * 2f)
+            style = Stroke(2f + energy * 2f)
         )
     }
 }
 
-/** OMEGA — trust / stability path */
 @Composable
 fun OmegaOverlay(output: EntityOutput) {
-    val unusual = (1f - output.omegaTrust.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+    val energy = (1f - output.omegaTrust.coerceIn(0f, 1f)).coerceIn(0f, 1f)
     Canvas(Modifier.fillMaxSize()) {
         val cx = size.width / 2f
         val cy = size.height / 2f
@@ -220,10 +334,10 @@ fun OmegaOverlay(output: EntityOutput) {
             drawLine(Color(0x3300FF00), Offset(i * stepX, 0f), Offset(i * stepX, size.height), 1f)
             drawLine(Color(0x3300FF00), Offset(0f, i * stepY), Offset(size.width, i * stepY), 1f)
         }
-        drawRect(Color(0.05f, 0.25f, 0.05f, 0.25f + unusual * 0.2f))
+        drawRect(Color(0.05f, 0.22f, 0.05f, 0.22f + energy * 0.2f))
         drawCircle(
-            Color(0.2f, 1f, 0.2f, 0.3f + unusual * 0.35f),
-            radius = 25f + unusual * 45f,
+            Color(0.2f, 1f, 0.2f, 0.25f + energy * 0.4f),
+            radius = 22f + energy * 48f,
             center = Offset(cx, cy),
             style = Stroke(2f)
         )
