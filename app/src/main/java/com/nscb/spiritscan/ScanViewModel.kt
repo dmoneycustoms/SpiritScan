@@ -3,7 +3,6 @@ package com.nscb.spiritscan
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.DiagnosticsEngine
 import com.nscb.spiritscan.engines.DiagnosticsState
@@ -20,10 +19,8 @@ import com.nscb.spiritscan.sensor.SensorStreamManager
 import com.nscb.spiritscan.sensor.SpiritBox
 import com.nscb.spiritscan.sensor.SweepMode
 import com.nscb.spiritscan.ui.modes.ScanMode
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val appContext = app.applicationContext
@@ -78,20 +75,21 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             try { audioEngine = AudioEngine(appContext) } catch (_: Exception) {}
         }
         sensors = SensorStreamManager(ctx) { sample ->
-            // OFFLOAD heavy work off the main thread
-            viewModelScope.launch(Dispatchers.Default) {
-                val snap = sensors?.buffer?.snapshot().orEmpty()
+            try {
+                val snap = sensors?.buffer?.snapshot() ?: emptyList()
                 val out = engine.process(
-                    sample, snap, visResidual = visionResidual, audioRms = box.rms,
-                    heading = sensors?.heading ?: 0f,
-                    ambientC = sensors?.ambientC,
-                    lux = sensors?.lux,
-                    lumHot = 0.55f,
-                    lumCold = 0.25f,
+                    sample,
+                    snap,
+                    visionResidual,
+                    sensors?.heading ?: 0f,
+                    sensors?.ambientC,
+                    sensors?.lux,
+                    0.55f,
+                    0.25f,
+                    box.rms,
                 )
                 _output.value = out
 
-                // v8.3: fusion -> hud -> diagnostics -> performance -> audio
                 val t0 = System.nanoTime()
                 val fused = fusionEngine.fuse(out)
                 val fusionNs = System.nanoTime() - t0
@@ -104,6 +102,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     avgFrameMs = perfEngine.updateFrameTime(_diag.value?.frameMs ?: 0f)
                 )
                 try { audioEngine?.apply(out, fused) } catch (_: Exception) {}
+            } catch (_: Exception) {
+                // keep app from closing on ARM crash
             }
         }
         sensors?.start()
