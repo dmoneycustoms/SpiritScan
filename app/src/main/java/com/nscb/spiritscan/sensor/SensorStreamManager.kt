@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sqrt
 
 data class Sample9(
@@ -81,15 +82,36 @@ class SensorStreamManager(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 }
 
+/**
+ * Online mean/variance. z() uses a minimum SD so a rock-still CAL
+ * does not make every phone tilt look like z=±14.
+ */
 class Welford {
-    var n = 0; var mean = 0.0; var m2 = 0.0
+    var n = 0
+    var mean = 0.0
+    var m2 = 0.0
+
     fun push(x: Double) {
-        n++; val d = x - mean; mean += d / n; m2 += d * (x - mean)
+        n++
+        val d = x - mean
+        mean += d / n
+        m2 += d * (x - mean)
     }
-    fun z(x: Double): Float {
+
+    /**
+     * @param minSd floor on standard deviation (µT for |B|).
+     * Default 2.5 µT — typical quiet indoor jitter floor.
+     */
+    fun z(x: Double, minSd: Double = 2.5): Float {
         if (n < 8) return 0f
-        val sd = sqrt(m2 / (n - 1).coerceAtLeast(1))
-        return ((x - mean) / (sd + 1e-6)).toFloat()
+        val rawSd = sqrt(m2 / (n - 1).coerceAtLeast(1))
+        val sd = max(minSd, rawSd)
+        return ((x - mean) / sd).toFloat()
     }
-    fun reset() { n = 0; mean = 0.0; m2 = 0.0 }
+
+    fun reset() {
+        n = 0
+        mean = 0.0
+        m2 = 0.0
+    }
 }
