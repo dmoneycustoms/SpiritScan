@@ -147,19 +147,26 @@ class EntityEngine {
         val normalEarth = magUt in 30f..75f
         val strongDevice = label == "device_interference" && mains > 0.60f && !normalEarth
         val orientationDrift = !calibrating && normalEarth && abs(zMag) > 4f
+        // Quiet indoor Earth field must not stay pegged as device_interference
+        val forceNormal = !calibrating && normalEarth && mains < 0.65f && abs(zMag) < 6f
         val activity = when {
             calibrating -> "quiet"
             strongDevice -> "device"
-            orientationDrift -> "quiet"
+            forceNormal || orientationDrift -> "quiet"
             label == "environmental_shift" -> "environmental"
             label == "candidate_entity" && scoreEma > 0.22f -> "unclassified"
             scoreEma > 0.45f -> "unclassified"
             scoreEma > 0.22f -> "environmental"
             else -> "quiet"
         }
-        // If Jones still says device but we are on normal Earth field, force label soft
-        val outLabel = if (orientationDrift && label == "device_interference") "normal" else label
-        val outScore = if (outLabel == "normal" && label == "device_interference") (1f - p).coerceAtLeast(0.2f) else p
+        val outLabel = when {
+            forceNormal && label == "device_interference" -> "normal"
+            orientationDrift && label == "device_interference" -> "normal"
+            else -> label
+        }
+        val outScore = if (outLabel == "normal" && label == "device_interference") {
+            max(0.55f, 1f - p * 0.3f)
+        } else p
         val note = when {
             activity == "quiet" && orientationDrift ->
                 "Normal indoor |B|. High z from phone move/tilt — hold still or re-CAL."
