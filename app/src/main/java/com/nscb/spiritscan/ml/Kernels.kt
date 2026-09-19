@@ -75,9 +75,11 @@ fun runSde(features: FloatArray): SdeOut {
     val jones = (x[4] + x[5] + x[6]) / 3f
     val sde = (x[7] + sAmp + sParity + sDiff) * 0.25f
     val composite = temporal * 0.2f + harmonic * 0.2f + jones * 0.35f + sde * 0.25f
+    // systemOk: allow mild indoor mains (x[13]); only fail on severe coupling + weak composite
+    val systemOk = composite > 0.45f && sigmaSde > 0.40f && x[13] < 0.85f
     return SdeOut(
         sigmaSde, composite, temporal, harmonic, jones, sde, sAmp, sParity, sDiff,
-        composite > 0.6f && sigmaSde > 0.6f && x[13] < 0.9f,
+        systemOk,
     )
 }
 
@@ -172,17 +174,18 @@ fun runQida(G: Array<FloatArray>, dtIn: Float): QidaOut {
 }
 
 fun classifyJones(features: FloatArray, qidaR: Float, mains: Float, drift: Float, coin: Float): Pair<String, Float> {
-    // Indoor rooms almost always have some 50/60 Hz — only flag DEVICE when mains is strong
+    // Only flag DEVICE when mains coupling is clearly strong
     val rawDevice = mains * 0.7f + features.getOrElse(13) { 0f } * 0.3f
     val device = when {
-        mains < 0.35f -> rawDevice * 0.2f          // ignore mild hum
-        mains < 0.55f -> rawDevice * 0.45f         // weak — rarely win
-        else -> rawDevice                          // clear coupling
+        mains < 0.40f -> rawDevice * 0.10f
+        mains < 0.60f -> rawDevice * 0.30f
+        mains < 0.75f -> rawDevice * 0.60f
+        else -> rawDevice
     }
     val enviro = drift * 0.85f
     val entity = (qidaR * 0.55f + coin * 0.45f) * (1f - device.coerceIn(0f, 1f))
-    // Bias toward normal in typical calm conditions
-    val normal = max(0.15f, 1f - max(device, max(enviro, entity))) + if (mains < 0.4f && drift < 0.25f) 0.2f else 0f
+    val normal = max(0.25f, 1f - max(device, max(enviro, entity))) +
+        if (mains < 0.5f && drift < 0.3f) 0.35f else 0f
     val scores = mapOf(
         "normal" to normal,
         "device_interference" to device,
@@ -190,12 +193,10 @@ fun classifyJones(features: FloatArray, qidaR: Float, mains: Float, drift: Float
         "candidate_entity" to entity,
     )
     val best = scores.maxBy { it.value }
-    // Extra gate: device_interference only if it clearly beats normal
-    if (best.key == "device_interference" && device < normal + 0.12f) {
-        return "normal" to normal
-    }
-    if (best.key == "device_interference" && mains < 0.5f) {
-        return "normal" to normal
+    // Hard gates: device never wins unless mains is strong and clearly best
+    if (best.key == "device_interference") {
+        if (mains < 0.65f) return "normal" to normal.coerceAtLeast(0.55f)
+        if (device < normal + 0.20f) return "normal" to normal.coerceAtLeast(0.55f)
     }
     return best.key to best.value
 }
