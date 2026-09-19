@@ -93,9 +93,11 @@ class EntityEngine {
         if (calibrating) magBase.push(magUt.toDouble())
         if (calibrating) visBase.push(visResidual.toDouble())
         val zMag = magBase.z(magUt.toDouble())
+        // Mag-only Laplacian proxy — do NOT feed camera residual into Jones/SDE
+        val magLap = abs(zMag) / 10f
         val jonesHv = runJonesHv(
             sample.magX / 80f, sample.magY / 80f, 0.35f, 1.1f, 2.4f,
-            visResidual * 8f, 0.55f, abs(zMag) / 8f, 0.85f, 0.08f,
+            magLap, 0.55f, abs(zMag) / 8f, 0.85f, 0.08f,
         )
         val mag = window.map { it.magUt }
         val mains = mainsHum(mag)
@@ -109,8 +111,10 @@ class EntityEngine {
             floatArrayOf(it.magX, it.magY, it.magZ, 0f)
         }.toTypedArray().ifEmpty { arrayOf(floatArrayOf(sample.magX, sample.magY, sample.magZ, 0f)) }
         val qida: QidaOut = runQida(G, 0.02f)
-        val coin = min(1f, (if (abs(zMag) > 5f && (magUt < 30f || magUt > 80f)) 0.35f else 0f) + visResidual * 3f + audioRms * 6f)
+        // Coincidence for Jones entity path — MAG ONLY (vision was swinging labels when lens covered)
+        val coin = min(1f, if (abs(zMag) > 5f && (magUt < 30f || magUt > 80f)) 0.35f else 0f)
         val (label, p) = classifyJones(feats, qida.residual, mains, drift, coin)
+        // Omega still may note vision as soft context only
         val omega: OmegaOut = runOmega(p, qida.residual, mains, 0.5f, 0.6f, 0.5f, 0.4f, coin)
         val oly: OlympusOut = runOlympus(p, 0.9f, 3f, 6f, qida.geodesic, 2f, 0.01f, 10f, 144f, 144f, 1f, 0.2f, 0.15f, 1f)
 
@@ -133,8 +137,11 @@ class EntityEngine {
         lastAcc = accH
         val thermal = (lumHot - lumCold).coerceIn(0f, 1f)
         val magHit = abs(zMag) > 5f && (magUt < 30f || magUt > 80f)
-        val instant = (if (magHit) 0.34f else 0f) + (if (visResidual > 0.04f) 0.28f else 0f) +
-            (if (audioRms > 0.01f) 0.2f else 0f) + (if (thermal > 0.22f) 0.18f else 0f)
+        // Survey residual score: magnetics primary; vision is soft only (does not drive Jones)
+        val instant = (if (magHit) 0.40f else 0f) +
+            (if (audioRms > 0.02f) 0.12f else 0f) +
+            (if (thermal > 0.22f) 0.12f else 0f) +
+            (if (visResidual > 0.08f) 0.08f else 0f)
         scoreEma = scoreEma * 0.92f + instant * 0.08f
         // Normal Earth |B| is ~25–65 µT. High z with normal |B| = phone tilt / move after CAL, not mains.
         val normalEarth = magUt in 30f..75f
