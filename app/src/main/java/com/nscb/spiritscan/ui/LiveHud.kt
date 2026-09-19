@@ -170,8 +170,16 @@ private fun CameraWithDetection(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    // Throttle UI updates to ~4 Hz — stops screen shake from every-frame ML results
     val detector = remember {
-        SpiritObjectDetector { boxes -> onObjects(boxes) }
+        var lastMs = 0L
+        SpiritObjectDetector { boxes ->
+            val now = System.currentTimeMillis()
+            if (now - lastMs >= 250L) {
+                lastMs = now
+                onObjects(boxes)
+            }
+        }
     }
 
     DisposableEffect(Unit) {
@@ -200,6 +208,7 @@ private fun CameraWithDetection(
             }
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(android.util.Size(640, 480))
                 .build()
                 .also { it.setAnalyzer(analysisExecutor, detector) }
 
@@ -341,11 +350,6 @@ fun LiveHud(vm: ScanViewModel) {
                 FilterMode.OBJ -> {
                     ObjectOverlay(boxes = objects, output = output, showPlumes = true)
                 }
-            }
-
-            // Always show thin object boxes when objects found (optional aid)
-            if (filter != FilterMode.OBJ && objects.isNotEmpty()) {
-                ObjectOverlay(boxes = objects, output = output, showPlumes = false)
             }
 
             if (alert) {
