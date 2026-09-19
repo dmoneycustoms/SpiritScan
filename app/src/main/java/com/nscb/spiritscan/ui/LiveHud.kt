@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nscb.spiritscan.ScanViewModel
+import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.ui.diagnostics.NSCBDiagnostics
 import com.nscb.spiritscan.ui.entity.EntityModeUI
@@ -238,6 +239,7 @@ fun LiveHud(vm: ScanViewModel) {
     val hud by vm.hud.collectAsState()
     val diag by vm.diag.collectAsState()
     val perf by vm.perf.collectAsState()
+    val ark by vm.ark.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -404,6 +406,34 @@ fun LiveHud(vm: ScanViewModel) {
                     color = if (output.calibrated) Signal else Danger,
                     fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
+            }
+
+            // ARK Module 19
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("ARK · MODULE 19", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val a = ark
+                if (a == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "phase ${"%.3f".format(a.arkPhase)}  weight ${"%.3f".format(a.arkWeight)}  fusion ${"%.3f".format(a.fusionNorm)}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "SDE drift ${"%.2f".format(a.sdeDrift)}  noise ${"%.2f".format(a.sdeNoise)}  res ${"%.2f".format(a.sdeResidual)}",
+                        color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "Jones ${a.jonesName.uppercase()}  ·  drift ${a.driftName.uppercase()}  ·  ${a.alignName.uppercase()}",
+                        color = Signal, fontFamily = FontFamily.Monospace, fontSize = 12.sp
+                    )
+                }
             }
 
             Column(
