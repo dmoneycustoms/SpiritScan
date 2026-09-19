@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nscb.spiritscan.ScanViewModel
 import com.nscb.spiritscan.engines.ArkEngine
+import com.nscb.spiritscan.engines.NoiseSplitState
 import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.ui.diagnostics.NSCBDiagnostics
 import com.nscb.spiritscan.ui.entity.EntityModeUI
@@ -240,6 +241,7 @@ fun LiveHud(vm: ScanViewModel) {
     val diag by vm.diag.collectAsState()
     val perf by vm.perf.collectAsState()
     val ark by vm.ark.collectAsState()
+    val noise by vm.noise.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -433,6 +435,33 @@ fun LiveHud(vm: ScanViewModel) {
                         "Jones ${a.jonesName.uppercase()}  ·  drift ${a.driftName.uppercase()}  ·  ${a.alignName.uppercase()}",
                         color = Signal, fontFamily = FontFamily.Monospace, fontSize = 12.sp
                     )
+                }
+            }
+
+            // NOISE SPLIT
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("NOISE SPLIT", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val n = noise
+                if (n == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "WIRE ${"%.0f".format(n.wire * 100)}%  MOTION ${"%.0f".format(n.motion * 100)}%  PHONE ${"%.0f".format(n.phone * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "RESIDUAL ${"%.0f".format(n.residual * 100)}%  ·  dominant ${n.dominant}",
+                        color = if (n.dominant == "RESIDUAL") Danger else Signal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(n.note, color = Mute, fontSize = 11.sp)
                 }
             }
 
