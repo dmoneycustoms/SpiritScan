@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.ArkEngine
+import com.nscb.spiritscan.engines.NoiseSplit
+import com.nscb.spiritscan.engines.NoiseSplitState
 import com.nscb.spiritscan.engines.DiagnosticsEngine
 import com.nscb.spiritscan.engines.DiagnosticsState
 import com.nscb.spiritscan.engines.FusionEngine
@@ -71,6 +73,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _ark = MutableStateFlow<ArkEngine.ArkTick?>(null)
     val ark: StateFlow<ArkEngine.ArkTick?> = _ark
 
+    private val _noise = MutableStateFlow<NoiseSplitState?>(null)
+    val noise: StateFlow<NoiseSplitState?> = _noise
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -128,10 +133,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val noiseState = try {
+                        NoiseSplit.analyze(snap, sample, boxOn = _boxOn.value)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
                         _ark.value = arkTick
+                        _noise.value = noiseState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
