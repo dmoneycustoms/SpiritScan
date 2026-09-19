@@ -122,7 +122,7 @@ private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mod
 private fun isAnomalyAlert(o: EntityOutput): Boolean {
     val label = o.jonesLabel.lowercase()
     val highMag = o.magUt >= 80f
-    val extremeZ = abs(o.zMag) >= 10f
+    val extremeZ = abs(o.zMag) >= 12f && (o.magUt < 30f || o.magUt > 80f)
     // SDE fail alone is common near wiring — do NOT alert on it by itself
     return highMag ||
         extremeZ ||
