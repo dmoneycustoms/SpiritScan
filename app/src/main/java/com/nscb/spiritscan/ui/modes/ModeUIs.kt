@@ -304,7 +304,10 @@ fun InterferenceModeUI(output: EntityOutput) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("DEVICE INTERFERENCE", color = Color.Green, fontSize = 22.sp, fontFamily = FontFamily.Monospace)
-        val interference = !output.sdeOk
+        // Real interference = Jones device label OR severe SDE fail with abnormal |B|
+        val normalEarth = output.magUt in 30f..75f
+        val interference = (output.jonesLabel == "device_interference" && !normalEarth) ||
+            (!output.sdeOk && (output.magUt < 30f || output.magUt > 80f))
 
         Text(
             "Status: ${if (interference) "INTERFERENCE DETECTED" else "STABLE"}",
@@ -312,7 +315,7 @@ fun InterferenceModeUI(output: EntityOutput) {
             fontSize = 18.sp, fontFamily = FontFamily.Monospace
         )
 
-        val intensity = if (interference) 1f else 0f
+        val intensity = if (interference) 0.85f else 0.15f
         Box(Modifier.fillMaxWidth().height(14.dp).background(Color.DarkGray)) {
             Box(
                 Modifier.fillMaxHeight()
