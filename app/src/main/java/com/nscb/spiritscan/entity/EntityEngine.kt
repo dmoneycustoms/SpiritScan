@@ -136,9 +136,11 @@ class EntityEngine {
         val instant = (if (magHit) 0.34f else 0f) + (if (visResidual > 0.04f) 0.28f else 0f) +
             (if (audioRms > 0.01f) 0.2f else 0f) + (if (thermal > 0.22f) 0.18f else 0f)
         scoreEma = scoreEma * 0.92f + instant * 0.08f
+        // Only show DEVICE site when classifier is firm AND z/mag support it
+        val strongDevice = label == "device_interference" && (mains > 0.55f || abs(zMag) > 4f)
         val activity = when {
             calibrating -> "quiet"
-            label == "device_interference" -> "device"
+            strongDevice -> "device"
             label == "environmental_shift" -> "environmental"
             label == "candidate_entity" && scoreEma > 0.22f -> "unclassified"
             scoreEma > 0.45f -> "unclassified"
@@ -146,8 +148,8 @@ class EntityEngine {
             else -> "quiet"
         }
         val note = when (activity) {
-            "quiet" -> "Quiet residual. Peak z |B| ${"%.1f".format(zMag)}. Not a presence."
-            "device" -> "Periodic / mains coupling. Step off wiring and re-sample."
+            "quiet" -> "Quiet residual. Peak z |B| ${"%.1f".format(zMag)}. Baseline locked — normal indoor field."
+            "device" -> "Strong periodic / mains coupling. Step off wiring and re-sample."
             "environmental" -> "Field or operator motion. Walk a second loop while still."
             else -> "Unclassified residual after device and environment subtraction. Score ${"%.2f".format(scoreEma)}. Not a confirmed spirit."
         }
