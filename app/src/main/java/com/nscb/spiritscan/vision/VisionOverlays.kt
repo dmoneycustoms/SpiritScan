@@ -19,12 +19,6 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlin.random.Random
 
-/**
- * Stronger software vision layers.
- * HEAT: particles + plumes driven by residual / QIDA / z-mag / thermal.
- * Not real IR — visualizes what the models measure that eyes may not see.
- */
-
 private fun ironbow(t: Float, alpha: Float = 0.5f): Color {
     val x = t.coerceIn(0f, 1f)
     val r = when {
@@ -47,20 +41,20 @@ private fun ironbow(t: Float, alpha: Float = 0.5f): Color {
     return Color(r.coerceIn(0f, 1f), g.coerceIn(0f, 1f), b.coerceIn(0f, 1f), alpha)
 }
 
-private data class Particle(
-    var x: Float,
-    var y: Float,
-    var vx: Float,
-    var vy: Float,
-    var life: Float,
-    var maxLife: Float,
-    var size: Float,
-    var heat: Float
-)
+/** Mutable particle — not a data class (avoids private data-class access errors). */
+private class HeatParticle {
+    var x = Random.nextFloat()
+    var y = Random.nextFloat()
+    var vx = (Random.nextFloat() - 0.5f) * 0.15f
+    var vy = -0.05f - Random.nextFloat() * 0.12f
+    var life = Random.nextFloat()
+    var maxLife = 0.6f + Random.nextFloat() * 1.2f
+    var size = 4f + Random.nextFloat() * 10f
+    var heat = Random.nextFloat()
+}
 
 @Composable
 fun HeatOverlay(output: EntityOutput) {
-    // Model-driven “unusual” energy 0..1
     val energy = (
         output.qida * 0.35f +
             output.residualLevel * 0.30f +
@@ -69,22 +63,7 @@ fun HeatOverlay(output: EntityOutput) {
             output.jonesScore * 0.05f
         ).coerceIn(0f, 1f)
 
-    val particles = remember {
-        MutableList(28) {
-            Particle(
-                x = Random.nextFloat(),
-                y = Random.nextFloat(),
-                vx = (Random.nextFloat() - 0.5f) * 0.15f,
-                vy = -0.05f - Random.nextFloat() * 0.12f,
-                life = Random.nextFloat(),
-                maxLife = 0.6f + Random.nextFloat() * 1.2f,
-                size = 4f + Random.nextFloat() * 10f,
-                heat = Random.nextFloat()
-            )
-        }
-    }
-
-    // Frame tick forces Canvas redraw
+    val particles = remember { List(28) { HeatParticle() } }
     var frame by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(Unit) {
@@ -99,10 +78,8 @@ fun HeatOverlay(output: EntityOutput) {
                 p.life -= dt / p.maxLife
                 p.x += p.vx * dt * (0.5f + e)
                 p.y += p.vy * dt * (0.5f + e)
-                val cx = 0.5f
-                val cy = 0.45f
-                p.vx += (cx - p.x) * 0.08f * e * dt
-                p.vy += (cy - p.y) * 0.05f * e * dt - 0.025f * e * dt
+                p.vx += (0.5f - p.x) * 0.08f * e * dt
+                p.vy += (0.45f - p.y) * 0.05f * e * dt - 0.025f * e * dt
                 if (p.life <= 0f || p.y < -0.05f || p.x < -0.1f || p.x > 1.1f) {
                     if (Random.nextFloat() < spawnBoost) {
                         p.x = 0.15f + Random.nextFloat() * 0.7f
@@ -121,8 +98,7 @@ fun HeatOverlay(output: EntityOutput) {
         }
     }
 
-    // Read frame so Compose tracks it for redraw
-    val _tick = frame
+    val tick = frame
 
     Canvas(Modifier.fillMaxSize()) {
         val w = size.width
@@ -131,7 +107,6 @@ fun HeatOverlay(output: EntityOutput) {
         val cy = h * 0.42f
         val maxR = min(w, h) * (0.25f + energy * 0.35f)
 
-        // 8x grid aligned to camera box
         val stepX = w / 8f
         val stepY = h / 8f
         for (i in 1 until 8) {
@@ -139,10 +114,8 @@ fun HeatOverlay(output: EntityOutput) {
             drawLine(Color(0x22FFFFFF), Offset(0f, i * stepY), Offset(w, i * stepY), 1f)
         }
 
-        // Soft heat wash
         drawRect(ironbow(energy * 0.35f, 0.22f + energy * 0.15f))
 
-        // Central plume (forms when models read residual)
         if (energy > 0.08f) {
             drawCircle(
                 brush = Brush.radialGradient(
@@ -157,36 +130,19 @@ fun HeatOverlay(output: EntityOutput) {
                 radius = maxR,
                 center = Offset(cx, cy)
             )
-            // rising secondary plume
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        ironbow((energy + 0.25f).coerceIn(0f, 1f), 0.35f),
-                        Color.Transparent
-                    ),
-                    center = Offset(cx, cy - maxR * 0.35f),
-                    radius = maxR * 0.55f
-                ),
-                radius = maxR * 0.55f,
-                center = Offset(cx, cy - maxR * 0.35f)
-            )
         }
 
-        // Particles — motion the eye may not resolve as “signal”
         for (p in particles) {
             if (p.life <= 0f) continue
             val alpha = (p.life * (0.4f + energy * 0.6f)).coerceIn(0f, 0.95f)
-            val px = p.x * w
-            val py = p.y * h
             val r = p.size * (0.85f + energy * 0.5f)
             drawCircle(
                 color = ironbow(p.heat * (0.5f + energy * 0.5f), alpha),
                 radius = r,
-                center = Offset(px, py)
+                center = Offset(p.x * w, p.y * h)
             )
         }
 
-        // Hot core ring when residual spikes
         if (energy > 0.35f) {
             drawCircle(
                 color = ironbow(0.95f, 0.4f + energy * 0.3f),
@@ -195,6 +151,9 @@ fun HeatOverlay(output: EntityOutput) {
                 style = Stroke(width = 2f + energy * 2f)
             )
         }
+        // silence unused warning
+        @Suppress("UNUSED_EXPRESSION")
+        tick
     }
 }
 
