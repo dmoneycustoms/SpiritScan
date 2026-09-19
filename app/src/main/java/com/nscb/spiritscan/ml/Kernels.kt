@@ -172,10 +172,17 @@ fun runQida(G: Array<FloatArray>, dtIn: Float): QidaOut {
 }
 
 fun classifyJones(features: FloatArray, qidaR: Float, mains: Float, drift: Float, coin: Float): Pair<String, Float> {
-    val device = mains * 0.7f + features.getOrElse(13) { 0f } * 0.3f
-    val enviro = drift
-    val entity = (qidaR * 0.55f + coin * 0.45f) * (1f - device)
-    val normal = max(0f, 1f - max(device, max(enviro, entity)))
+    // Indoor rooms almost always have some 50/60 Hz — only flag DEVICE when mains is strong
+    val rawDevice = mains * 0.7f + features.getOrElse(13) { 0f } * 0.3f
+    val device = when {
+        mains < 0.35f -> rawDevice * 0.2f          // ignore mild hum
+        mains < 0.55f -> rawDevice * 0.45f         // weak — rarely win
+        else -> rawDevice                          // clear coupling
+    }
+    val enviro = drift * 0.85f
+    val entity = (qidaR * 0.55f + coin * 0.45f) * (1f - device.coerceIn(0f, 1f))
+    // Bias toward normal in typical calm conditions
+    val normal = max(0.15f, 1f - max(device, max(enviro, entity))) + if (mains < 0.4f && drift < 0.25f) 0.2f else 0f
     val scores = mapOf(
         "normal" to normal,
         "device_interference" to device,
@@ -183,5 +190,12 @@ fun classifyJones(features: FloatArray, qidaR: Float, mains: Float, drift: Float
         "candidate_entity" to entity,
     )
     val best = scores.maxBy { it.value }
+    // Extra gate: device_interference only if it clearly beats normal
+    if (best.key == "device_interference" && device < normal + 0.12f) {
+        return "normal" to normal
+    }
+    if (best.key == "device_interference" && mains < 0.5f) {
+        return "normal" to normal
+    }
     return best.key to best.value
 }
