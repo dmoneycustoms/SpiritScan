@@ -109,7 +109,7 @@ class EntityEngine {
             floatArrayOf(it.magX, it.magY, it.magZ, 0f)
         }.toTypedArray().ifEmpty { arrayOf(floatArrayOf(sample.magX, sample.magY, sample.magZ, 0f)) }
         val qida: QidaOut = runQida(G, 0.02f)
-        val coin = min(1f, (if (abs(zMag) > 2.4f) 0.4f else 0f) + visResidual * 4f + audioRms * 8f)
+        val coin = min(1f, (if (abs(zMag) > 5f && (magUt < 30f || magUt > 80f)) 0.35f else 0f) + visResidual * 3f + audioRms * 6f)
         val (label, p) = classifyJones(feats, qida.residual, mains, drift, coin)
         val omega: OmegaOut = runOmega(p, qida.residual, mains, 0.5f, 0.6f, 0.5f, 0.4f, coin)
         val oly: OlympusOut = runOlympus(p, 0.9f, 3f, 6f, qida.geodesic, 2f, 0.01f, 10f, 144f, 144f, 1f, 0.2f, 0.15f, 1f)
@@ -132,26 +132,38 @@ class EntityEngine {
         }
         lastAcc = accH
         val thermal = (lumHot - lumCold).coerceIn(0f, 1f)
-        val magHit = abs(zMag) > 2.4f
+        val magHit = abs(zMag) > 5f && (magUt < 30f || magUt > 80f)
         val instant = (if (magHit) 0.34f else 0f) + (if (visResidual > 0.04f) 0.28f else 0f) +
             (if (audioRms > 0.01f) 0.2f else 0f) + (if (thermal > 0.22f) 0.18f else 0f)
         scoreEma = scoreEma * 0.92f + instant * 0.08f
-        // Only show DEVICE site when classifier is firm AND z/mag support it
-        val strongDevice = label == "device_interference" && (mains > 0.55f || abs(zMag) > 4f)
+        // Normal Earth |B| is ~25–65 µT. High z with normal |B| = phone tilt / move after CAL, not mains.
+        val normalEarth = magUt in 30f..75f
+        val strongDevice = label == "device_interference" && mains > 0.60f && !normalEarth
+        val orientationDrift = !calibrating && normalEarth && abs(zMag) > 4f
         val activity = when {
             calibrating -> "quiet"
             strongDevice -> "device"
+            orientationDrift -> "quiet"
             label == "environmental_shift" -> "environmental"
             label == "candidate_entity" && scoreEma > 0.22f -> "unclassified"
             scoreEma > 0.45f -> "unclassified"
             scoreEma > 0.22f -> "environmental"
             else -> "quiet"
         }
-        val note = when (activity) {
-            "quiet" -> "Quiet residual. Peak z |B| ${"%.1f".format(zMag)}. Baseline locked — normal indoor field."
-            "device" -> "Strong periodic / mains coupling. Step off wiring and re-sample."
-            "environmental" -> "Field or operator motion. Walk a second loop while still."
-            else -> "Unclassified residual after device and environment subtraction. Score ${"%.2f".format(scoreEma)}. Not a confirmed spirit."
+        // If Jones still says device but we are on normal Earth field, force label soft
+        val outLabel = if (orientationDrift && label == "device_interference") "normal" else label
+        val outScore = if (outLabel == "normal" && label == "device_interference") (1f - p).coerceAtLeast(0.2f) else p
+        val note = when {
+            activity == "quiet" && orientationDrift ->
+                "Normal indoor |B|. High z from phone move/tilt — hold still or re-CAL."
+            activity == "quiet" ->
+                "Quiet residual. |B| ${"%.1f".format(magUt)} µT  z ${"%.1f".format(zMag)}. Baseline OK."
+            activity == "device" ->
+                "Strong periodic / mains coupling. Step off wiring and re-sample."
+            activity == "environmental" ->
+                "Field or operator motion. Walk a second loop while still."
+            else ->
+                "Unclassified residual after subtraction. Score ${"%.2f".format(scoreEma)}. Not a confirmed spirit."
         }
         val survey = SurveySnap(
             activity, scoreEma, note, magUt, zMag, thermal, ambientC, lux, heading,
@@ -159,7 +171,7 @@ class EntityEngine {
         )
         val progress = if (!calibrating) 1f else min(1f, magBase.n / 40f)
         return EntityOutput(
-            label, p, magUt, qida.residual, omega.omegaTrust, sde.systemOk, sde.composite,
+            outLabel, outScore, magUt, qida.residual, omega.omegaTrust, sde.systemOk, sde.composite,
             zMag, !calibrating, progress, survey, note,
             qida.residual, scoreEma.coerceIn(0f, 1f), zMag,
         )
