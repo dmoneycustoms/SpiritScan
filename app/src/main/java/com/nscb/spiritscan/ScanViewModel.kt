@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nscb.spiritscan.audio.AudioEngine
+import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.DiagnosticsEngine
 import com.nscb.spiritscan.engines.DiagnosticsState
 import com.nscb.spiritscan.engines.FusionEngine
@@ -33,7 +34,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val box = SpiritBox()
     private var sensors: SensorStreamManager? = null
 
-    // v8.3 engines
     private val fusionEngine = FusionEngine()
     private val hudEngine = HudEngine()
     private val diagEngine = DiagnosticsEngine()
@@ -67,7 +67,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _perf = MutableStateFlow<PerformanceState?>(null)
     val perf: StateFlow<PerformanceState?> = _perf
 
-    // Soft vision residual from camera frames
+    // ARK Module 19 live tick
+    private val _ark = MutableStateFlow<ArkEngine.ArkTick?>(null)
+    val ark: StateFlow<ArkEngine.ArkTick?> = _ark
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -92,7 +95,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // single processing gate to avoid flooding coroutines
         var processing = false
 
         sensors = SensorStreamManager(ctx) { sample ->
@@ -119,10 +121,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     val fused = fusionEngine.fuse(out)
                     val fusionNs = System.nanoTime() - t0
 
-                    // UI state updates on main thread
+                    // ARK unified tick (native Module 19)
+                    val arkTick = try {
+                        ArkEngine.tick(out)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
+                        _ark.value = arkTick
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
@@ -137,7 +146,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (_: Exception) {
                     }
                 } catch (_: Exception) {
-                    // swallow to keep ARM from killing app
                 } finally {
                     processing = false
                 }
