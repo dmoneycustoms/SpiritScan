@@ -499,8 +499,8 @@ fun LiveHud(vm: ScanViewModel) {
                         }
                     }
                     Text(
-                        "peak ${sp.peakBand}  mains ${"%.0f".format(sp.mainsEnergy * 100)}%  residSpec ${"%.0f".format(sp.residualSpectrum * 100)}%",
-                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                        "peak ${sp.peakBand} ${"%.1f".format(sp.peakHz)}Hz  Fs ${"%.0f".format(sp.sampleRateHz)}  mains ${"%.0f".format(sp.mainsEnergy * 100)}%  unk ${"%.0f".format(sp.residualSpectrum * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 10.sp
                     )
                     Text(sp.note, color = Mute, fontSize = 11.sp)
                 }
