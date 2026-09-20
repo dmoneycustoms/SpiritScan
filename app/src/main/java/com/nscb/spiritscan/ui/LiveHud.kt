@@ -47,6 +47,7 @@ import com.nscb.spiritscan.ScanViewModel
 import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.HardeningState
 import com.nscb.spiritscan.engines.ExplainState
+import com.nscb.spiritscan.engines.FiveWState
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.engines.NoiseSplitState
@@ -250,6 +251,7 @@ fun LiveHud(vm: ScanViewModel) {
     val trust by vm.trust.collectAsState()
     val qidaDec by vm.qidaDec.collectAsState()
     val explain by vm.explain.collectAsState()
+    val fiveW by vm.fiveW.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -582,6 +584,34 @@ fun LiveHud(vm: ScanViewModel) {
                     )
                     Text(ex.why, color = Fg, fontSize = 11.sp)
                     Text(ex.note, color = Mute, fontSize = 10.sp)
+                }
+            }
+
+            // 5W VALIDATOR
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("5W PACKET", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val fw = fiveW
+                if (fw == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text("WHO  ${fw.who}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHAT ${fw.what}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHEN ${fw.`when`}", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHERE ${fw.where}", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHY  ${fw.why.take(100)}", color = Fg, fontSize = 11.sp)
+                    Text(
+                        "compliance ${"%.0f".format(fw.complianceScore * 100)}%  rules ${fw.rulesOk}/${fw.rulesTotal}  ${if (fw.compliant) "OK" else "FAIL"}",
+                        color = if (fw.compliant) Signal else Danger,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(fw.note, color = Mute, fontSize = 10.sp)
                 }
             }
 
