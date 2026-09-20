@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nscb.spiritscan.ScanViewModel
 import com.nscb.spiritscan.engines.ArkEngine
+import com.nscb.spiritscan.engines.HardeningState
 import com.nscb.spiritscan.engines.NoiseSplitState
 import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.ui.diagnostics.NSCBDiagnostics
@@ -242,6 +243,7 @@ fun LiveHud(vm: ScanViewModel) {
     val perf by vm.perf.collectAsState()
     val ark by vm.ark.collectAsState()
     val noise by vm.noise.collectAsState()
+    val hard by vm.hard.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -462,6 +464,33 @@ fun LiveHud(vm: ScanViewModel) {
                         fontSize = 12.sp
                     )
                     Text(n.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // HARDENING (v81/v82 policy)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("HARDENING", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val h = hard
+                if (h == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "stable ${h.stableLabel} ${"%.0f".format(h.stableScore * 100)}%  gate ${"%.0f".format(h.hardeningScore * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        if (h.threatConfirmed) "THREAT CONFIRMED" else if (h.mitigated) "MITIGATED" else "STABLE",
+                        color = if (h.threatConfirmed) Danger else Signal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(h.note, color = Mute, fontSize = 11.sp)
                 }
             }
 
