@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.ArkEngine
+import com.nscb.spiritscan.engines.HardeningEngine
+import com.nscb.spiritscan.engines.HardeningState
 import com.nscb.spiritscan.engines.NoiseSplit
 import com.nscb.spiritscan.engines.NoiseSplitState
 import com.nscb.spiritscan.engines.DiagnosticsEngine
@@ -76,6 +78,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _noise = MutableStateFlow<NoiseSplitState?>(null)
     val noise: StateFlow<NoiseSplitState?> = _noise
 
+    private val _hard = MutableStateFlow<HardeningState?>(null)
+    val hard: StateFlow<HardeningState?> = _hard
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -139,11 +144,18 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val hardState = try {
+                        HardeningEngine.evaluate(out, noiseState?.dominant)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
                         _ark.value = arkTick
                         _noise.value = noiseState
+                        _hard.value = hardState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
@@ -167,7 +179,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         sensors?.start()
     }
 
-    fun calibrate() = engine.startCal()
+    fun calibrate() {
+        engine.startCal()
+        HardeningEngine.reset()
+    }
 
     fun toggleBox() {
         if (box.on) {
