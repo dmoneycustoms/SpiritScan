@@ -8,6 +8,8 @@ import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.HardeningEngine
 import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.TrustEngine
+import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.engines.NoiseSplit
 import com.nscb.spiritscan.engines.NoiseSplitState
 import com.nscb.spiritscan.engines.DiagnosticsEngine
@@ -81,6 +83,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _hard = MutableStateFlow<HardeningState?>(null)
     val hard: StateFlow<HardeningState?> = _hard
 
+    private val _trust = MutableStateFlow<TrustState?>(null)
+    val trust: StateFlow<TrustState?> = _trust
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -150,12 +155,19 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val trustState = try {
+                        TrustEngine.evaluate(out, noiseState, hardState)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
                         _ark.value = arkTick
                         _noise.value = noiseState
                         _hard.value = hardState
+                        _trust.value = trustState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
@@ -182,6 +194,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun calibrate() {
         engine.startCal()
         HardeningEngine.reset()
+        TrustEngine.reset()
     }
 
     fun toggleBox() {
