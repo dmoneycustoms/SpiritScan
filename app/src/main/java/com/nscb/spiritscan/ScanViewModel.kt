@@ -6,30 +6,30 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.ArkEngine
-import com.nscb.spiritscan.engines.HardeningEngine
-import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.DiagnosticsEngine
+import com.nscb.spiritscan.engines.DiagnosticsState
 import com.nscb.spiritscan.engines.ExplainEngine
 import com.nscb.spiritscan.engines.ExplainState
 import com.nscb.spiritscan.engines.FiveWEngine
 import com.nscb.spiritscan.engines.FiveWState
+import com.nscb.spiritscan.engines.FusionEngine
+import com.nscb.spiritscan.engines.FusionState
+import com.nscb.spiritscan.engines.HardeningEngine
+import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.HudEngine
+import com.nscb.spiritscan.engines.HudState
+import com.nscb.spiritscan.engines.NoiseSplit
+import com.nscb.spiritscan.engines.NoiseSplitState
+import com.nscb.spiritscan.engines.PerformanceEngine
+import com.nscb.spiritscan.engines.PerformanceState
+import com.nscb.spiritscan.engines.QidaDecisionEngine
+import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.ResidualFilter
 import com.nscb.spiritscan.engines.ResidualFilterState
 import com.nscb.spiritscan.engines.SpectralEngine
 import com.nscb.spiritscan.engines.SpectralState
-import com.nscb.spiritscan.engines.QidaDecisionEngine
-import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustEngine
 import com.nscb.spiritscan.engines.TrustState
-import com.nscb.spiritscan.engines.NoiseSplit
-import com.nscb.spiritscan.engines.NoiseSplitState
-import com.nscb.spiritscan.engines.DiagnosticsEngine
-import com.nscb.spiritscan.engines.DiagnosticsState
-import com.nscb.spiritscan.engines.FusionEngine
-import com.nscb.spiritscan.engines.FusionState
-import com.nscb.spiritscan.engines.HudEngine
-import com.nscb.spiritscan.engines.HudState
-import com.nscb.spiritscan.engines.PerformanceEngine
-import com.nscb.spiritscan.engines.PerformanceState
 import com.nscb.spiritscan.entity.EntityEngine
 import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.entity.SurveySnap
@@ -83,7 +83,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _perf = MutableStateFlow<PerformanceState?>(null)
     val perf: StateFlow<PerformanceState?> = _perf
 
-    // ARK Module 19 live tick
     private val _ark = MutableStateFlow<ArkEngine.ArkTick?>(null)
     val ark: StateFlow<ArkEngine.ArkTick?> = _ark
 
@@ -161,7 +160,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     val fused = fusionEngine.fuse(out)
                     val fusionNs = System.nanoTime() - t0
 
-                    // ARK unified tick (native Module 19)
                     val arkTick = try {
                         ArkEngine.tick(out)
                     } catch (_: Exception) {
