@@ -10,6 +10,8 @@ import com.nscb.spiritscan.engines.HardeningEngine
 import com.nscb.spiritscan.engines.HardeningState
 import com.nscb.spiritscan.engines.ExplainEngine
 import com.nscb.spiritscan.engines.ExplainState
+import com.nscb.spiritscan.engines.FiveWEngine
+import com.nscb.spiritscan.engines.FiveWState
 import com.nscb.spiritscan.engines.QidaDecisionEngine
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustEngine
@@ -95,6 +97,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _explain = MutableStateFlow<ExplainState?>(null)
     val explain: StateFlow<ExplainState?> = _explain
+
+    private val _fiveW = MutableStateFlow<FiveWState?>(null)
+    val fiveW: StateFlow<FiveWState?> = _fiveW
 
     @Volatile
     private var visionResidual: Float = 0.01f
@@ -183,6 +188,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val fiveWState = try {
+                        FiveWEngine.evaluate(out, noiseState, hardState, trustState, qidaDecState, explainState)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
@@ -192,6 +203,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         _trust.value = trustState
                         _qidaDec.value = qidaDecState
                         _explain.value = explainState
+                        _fiveW.value = fiveWState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
