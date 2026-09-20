@@ -14,6 +14,8 @@ import com.nscb.spiritscan.engines.FiveWEngine
 import com.nscb.spiritscan.engines.FiveWState
 import com.nscb.spiritscan.engines.ResidualFilter
 import com.nscb.spiritscan.engines.ResidualFilterState
+import com.nscb.spiritscan.engines.SpectralEngine
+import com.nscb.spiritscan.engines.SpectralState
 import com.nscb.spiritscan.engines.QidaDecisionEngine
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustEngine
@@ -105,6 +107,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _residFilter = MutableStateFlow<ResidualFilterState?>(null)
     val residFilter: StateFlow<ResidualFilterState?> = _residFilter
+
+    private val _spectral = MutableStateFlow<SpectralState?>(null)
+    val spectral: StateFlow<SpectralState?> = _spectral
 
     @Volatile
     private var visionResidual: Float = 0.01f
@@ -205,6 +210,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val spectralState = try {
+                        SpectralEngine.analyze(snap)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
@@ -216,6 +227,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         _explain.value = explainState
                         _fiveW.value = fiveWState
                         _residFilter.value = residFilterState
+                        _spectral.value = spectralState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
