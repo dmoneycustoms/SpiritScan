@@ -46,6 +46,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.nscb.spiritscan.ScanViewModel
 import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.ExplainState
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.engines.NoiseSplitState
@@ -248,6 +249,7 @@ fun LiveHud(vm: ScanViewModel) {
     val hard by vm.hard.collectAsState()
     val trust by vm.trust.collectAsState()
     val qidaDec by vm.qidaDec.collectAsState()
+    val explain by vm.explain.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -554,6 +556,32 @@ fun LiveHud(vm: ScanViewModel) {
                         fontSize = 12.sp
                     )
                     Text(qd.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // EXPLAIN (DOD XAI lite)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("EXPLAIN", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val ex = explain
+                if (ex == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "primary ${ex.primary} ${"%.0f".format(ex.primaryConf * 100)}%  band ${ex.confidenceBand}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "alt ${ex.alternative} ${"%.0f".format(ex.altConf * 100)}%  phys ${ex.physicsViolations}",
+                        color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(ex.why, color = Fg, fontSize = 11.sp)
+                    Text(ex.note, color = Mute, fontSize = 10.sp)
                 }
             }
 
