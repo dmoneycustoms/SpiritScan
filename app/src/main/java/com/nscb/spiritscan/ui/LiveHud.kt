@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,6 +50,7 @@ import com.nscb.spiritscan.engines.HardeningState
 import com.nscb.spiritscan.engines.ExplainState
 import com.nscb.spiritscan.engines.FiveWState
 import com.nscb.spiritscan.engines.ResidualFilterState
+import com.nscb.spiritscan.engines.SpectralState
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.engines.NoiseSplitState
@@ -242,6 +244,7 @@ fun LiveHud(vm: ScanViewModel) {
     val explain by vm.explain.collectAsState()
     val fiveW by vm.fiveW.collectAsState()
     val residFilter by vm.residFilter.collectAsState()
+    val spectral by vm.spectral.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -434,6 +437,72 @@ fun LiveHud(vm: ScanViewModel) {
                         fontSize = 12.sp
                     )
                     Text(rf.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // SPECTRUM (live mag |B|)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("SPECTRUM", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val sp = spectral
+                if (sp == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    // Bar row
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        sp.bins.forEachIndexed { i, v ->
+                            val hFrac = v.coerceIn(0.05f, 1f)
+                            val isMains = i == 3 || i == 4
+                            val isUnk = i == 7
+                            val col = when {
+                                isUnk && (residFilter?.active == true) -> Danger
+                                isMains -> Color(0xFFFF9800)
+                                else -> Signal
+                            }
+                            Column(
+                                Modifier.weight(1f),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .fillMaxHeight(hFrac)
+                                        .background(col.copy(alpha = 0.85f), RoundedCornerShape(3.dp))
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        sp.binLabels.forEach { lab ->
+                            Text(
+                                lab,
+                                Modifier.weight(1f),
+                                color = Mute,
+                                fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Text(
+                        "peak ${sp.peakBand}  mains ${"%.0f".format(sp.mainsEnergy * 100)}%  residSpec ${"%.0f".format(sp.residualSpectrum * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(sp.note, color = Mute, fontSize = 11.sp)
                 }
             }
 
