@@ -24,10 +24,11 @@ data class TrustState(
 )
 
 object TrustEngine {
-    private var trust = 0.72f
-    private const val ALPHA_UP = 0.08f
-    private const val ALPHA_DOWN = 0.18f
-    private const val LOW_TRUST = 0.35f
+    private var trust = 0.78f
+    private const val ALPHA_UP = 0.10f
+    private const val ALPHA_DOWN = 0.14f
+    private const val LOW_TRUST = 0.30f
+    private const val TRUST_FLOOR = 0.28f
 
     fun reset() {
         trust = 0.72f
@@ -68,15 +69,15 @@ object TrustEngine {
         // Contamination resistance: never climb trust while violations present
         if (viols > 0) {
             val drop = 0.12f * viols
-            trust = (trust * (1f - ALPHA_DOWN) + (trust - drop) * ALPHA_DOWN).coerceIn(0.05f, 1f)
+            trust = (trust * (1f - ALPHA_DOWN) + (trust - drop) * ALPHA_DOWN).coerceIn(TRUST_FLOOR, 1f)
         } else if (goodEvidence) {
-            trust = (trust * (1f - ALPHA_UP) + 0.92f * ALPHA_UP).coerceIn(0.05f, 1f)
+            trust = (trust * (1f - ALPHA_UP) + 0.92f * ALPHA_UP).coerceIn(TRUST_FLOOR, 1f)
         } else {
             // mild decay toward neutral
-            trust = (trust * 0.98f + 0.55f * 0.02f).coerceIn(0.05f, 1f)
+            trust = (trust * 0.985f + 0.70f * 0.015f).coerceIn(TRUST_FLOOR, 1f)
         }
 
-        val gateOpen = trust >= LOW_TRUST && viols == 0 && !(hard?.mitigated == true && hard.threatConfirmed)
+        val gateOpen = trust >= LOW_TRUST && viols == 0 && hard?.threatConfirmed != true
 
         val note = when {
             physicsViol -> "Physics violation — field out of band"
