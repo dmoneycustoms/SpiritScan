@@ -48,6 +48,7 @@ import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.HardeningState
 import com.nscb.spiritscan.engines.ExplainState
 import com.nscb.spiritscan.engines.FiveWState
+import com.nscb.spiritscan.engines.ResidualFilterState
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.engines.NoiseSplitState
@@ -125,35 +126,23 @@ private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mod
  * Alerts are strict so normal house fields (~45–60 µT) do NOT fire.
  * MAG path only alerts when |B| >= 80.
  */
-private fun isAnomalyAlert(o: EntityOutput): Boolean {
-    val label = o.jonesLabel.lowercase()
+private fun isAnomalyAlert(o: EntityOutput, unknown: ResidualFilterState?): Boolean {
+    // Only alert on: unexplained residual OR extreme out-of-band field
+    // Known noise (wire/motion/phone) must NOT fire the bar
+    if (unknown?.active == true) return true
     val highMag = o.magUt >= 80f
     val extremeZ = abs(o.zMag) >= 12f && (o.magUt < 30f || o.magUt > 80f)
-    // SDE fail alone is common near wiring — do NOT alert on it by itself
-    return highMag ||
-        extremeZ ||
-        o.residualLevel > 0.55f ||
-        o.qida > 0.55f ||
-        (o.jonesScore > 0.7f && (label.contains("unclass") || label.contains("entity") || label.contains("candidate"))) ||
-        (label.contains("interference") && highMag) ||
-        (!o.sdeOk && o.residualLevel > 0.4f && highMag)
+    return highMag || extremeZ
 }
 
-private fun alertMessage(o: EntityOutput): String {
-    val label = o.jonesLabel.lowercase()
+private fun alertMessage(o: EntityOutput, unknown: ResidualFilterState?): String {
     return when {
+        unknown?.active == true ->
+            "ALERT · UNKNOWN RESIDUAL ${"%.0f".format((unknown.unknown) * 100)}%"
         o.magUt >= 80f ->
             "ALERT · HIGH FIELD ${"%.0f".format(o.magUt)} µT"
         abs(o.zMag) >= 10f ->
             "ALERT · EXTREME Z ${"%.1f".format(o.zMag)}"
-        o.residualLevel > 0.55f ->
-            "ALERT · RESIDUAL ${"%.2f".format(o.residualLevel)}"
-        o.qida > 0.55f ->
-            "ALERT · QIDA ${"%.2f".format(o.qida)}"
-        label.contains("unclass") || label.contains("entity") || label.contains("candidate") ->
-            "ALERT · ${o.jonesLabel}"
-        !o.sdeOk && o.magUt >= 80f ->
-            "ALERT · SDE + HIGH FIELD"
         else ->
             "ALERT · ANOMALY"
     }
@@ -252,12 +241,13 @@ fun LiveHud(vm: ScanViewModel) {
     val qidaDec by vm.qidaDec.collectAsState()
     val explain by vm.explain.collectAsState()
     val fiveW by vm.fiveW.collectAsState()
+    val residFilter by vm.residFilter.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
     var objects by remember { mutableStateOf<List<DetectedObjectBox>>(emptyList()) }
 
-    val alert = isAnomalyAlert(output)
+    val alert = isAnomalyAlert(output, residFilter)
     val pulse = rememberInfiniteTransition(label = "pulse")
     val blink by pulse.animateFloat(
         initialValue = 0.35f,
@@ -283,7 +273,7 @@ fun LiveHud(vm: ScanViewModel) {
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
                 Text(
-                    alertMessage(output),
+                    alertMessage(output, residFilter),
                     color = Color.White,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
@@ -418,6 +408,33 @@ fun LiveHud(vm: ScanViewModel) {
                     color = if (output.calibrated) Signal else Danger,
                     fontFamily = FontFamily.Monospace, fontSize = 11.sp
                 )
+            }
+
+            // UNKNOWN RESIDUAL ONLY (known noise stripped)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("UNKNOWN RESIDUAL", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val rf = residFilter
+                if (rf == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "unknown ${"%.0f".format(rf.unknown * 100)}%  known ${"%.0f".format(rf.knownNoise * 100)}%  stripped ${rf.stripped}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        if (rf.active) "ACTIVE — unexplained" else "filtered / quiet",
+                        color = if (rf.active) Danger else Signal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(rf.note, color = Mute, fontSize = 11.sp)
+                }
             }
 
             // ARK Module 19
