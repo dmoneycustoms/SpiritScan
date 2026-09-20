@@ -46,6 +46,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.nscb.spiritscan.ScanViewModel
 import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.engines.NoiseSplitState
 import com.nscb.spiritscan.entity.EntityOutput
@@ -246,6 +247,7 @@ fun LiveHud(vm: ScanViewModel) {
     val noise by vm.noise.collectAsState()
     val hard by vm.hard.collectAsState()
     val trust by vm.trust.collectAsState()
+    val qidaDec by vm.qidaDec.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -525,6 +527,33 @@ fun LiveHud(vm: ScanViewModel) {
                         fontSize = 12.sp
                     )
                     Text(tr.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // QIDA DECISION (Trust-Math / 3CAI lite)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("QIDA DECISION", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val qd = qidaDec
+                if (qd == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "state ${qd.primaryState}  conf ${"%.0f".format(qd.confidence * 100)}%  score ${"%.0f".format(qd.decisionScore * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        if (qd.collapseOk) "COLLAPSE OK" else "HOLD",
+                        color = if (qd.collapseOk) Signal else Danger,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(qd.note, color = Mute, fontSize = 11.sp)
                 }
             }
 
