@@ -8,6 +8,8 @@ import com.nscb.spiritscan.audio.AudioEngine
 import com.nscb.spiritscan.engines.ArkEngine
 import com.nscb.spiritscan.engines.HardeningEngine
 import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.ExplainEngine
+import com.nscb.spiritscan.engines.ExplainState
 import com.nscb.spiritscan.engines.QidaDecisionEngine
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.TrustEngine
@@ -91,6 +93,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _qidaDec = MutableStateFlow<QidaDecisionState?>(null)
     val qidaDec: StateFlow<QidaDecisionState?> = _qidaDec
 
+    private val _explain = MutableStateFlow<ExplainState?>(null)
+    val explain: StateFlow<ExplainState?> = _explain
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -172,6 +177,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val explainState = try {
+                        ExplainEngine.evaluate(out, noiseState, hardState, trustState, qidaDecState)
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
@@ -180,6 +191,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         _hard.value = hardState
                         _trust.value = trustState
                         _qidaDec.value = qidaDecState
+                        _explain.value = explainState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
