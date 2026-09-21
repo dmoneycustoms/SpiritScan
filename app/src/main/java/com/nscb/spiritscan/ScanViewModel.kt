@@ -26,8 +26,12 @@ import com.nscb.spiritscan.engines.QidaDecisionEngine
 import com.nscb.spiritscan.engines.QidaDecisionState
 import com.nscb.spiritscan.engines.ResidualFilter
 import com.nscb.spiritscan.engines.ResidualFilterState
+import com.nscb.spiritscan.engines.AudioAnomalyEngine
+import com.nscb.spiritscan.engines.AudioAnomalyState
 import com.nscb.spiritscan.engines.SpectralEngine
 import com.nscb.spiritscan.engines.SpectralState
+import com.nscb.spiritscan.engines.VisionAnomalyEngine
+import com.nscb.spiritscan.engines.VisionAnomalyState
 import com.nscb.spiritscan.engines.TrustEngine
 import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.entity.EntityEngine
@@ -110,11 +114,27 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _spectral = MutableStateFlow<SpectralState?>(null)
     val spectral: StateFlow<SpectralState?> = _spectral
 
+    private val _audioAnom = MutableStateFlow<AudioAnomalyState?>(null)
+    val audioAnom: StateFlow<AudioAnomalyState?> = _audioAnom
+
+    private val _visionAnom = MutableStateFlow<VisionAnomalyState?>(null)
+    val visionAnom: StateFlow<VisionAnomalyState?> = _visionAnom
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
     fun onVisionFrame(residual: Float) {
         visionResidual = residual.coerceIn(0f, 1f)
+    }
+
+    fun onDetectedObjects(boxes: List<com.nscb.spiritscan.vision.DetectedObjectBox>) {
+        val noiseDom = _noise.value?.dominant
+        val residAct = _residFilter.value?.active == true
+        _visionAnom.value = try {
+            VisionAnomalyEngine.evaluate(boxes, visionResidual, noiseDom, residAct)
+        } catch (_: Exception) {
+            _visionAnom.value
+        }
     }
 
     fun setMode(mode: ScanMode) {
@@ -214,6 +234,23 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val audioAnomState = try {
+                        AudioAnomalyEngine.evaluate(box.rms, _boxOn.value, noiseState?.dominant)
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    val visionAnomState = try {
+                        VisionAnomalyEngine.evaluate(
+                            objects = emptyList(),
+                            visResidual = visionResidual,
+                            noiseDominant = noiseState?.dominant,
+                            residUnknownActive = residFilterState?.active == true
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+
                     withContext(Dispatchers.Main) {
                         _output.value = out
                         _fusion.value = fused
@@ -226,6 +263,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         _fiveW.value = fiveWState
                         _residFilter.value = residFilterState
                         _spectral.value = spectralState
+                        _audioAnom.value = audioAnomState
+                        _visionAnom.value = visionAnomState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
@@ -253,6 +292,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         engine.startCal()
         HardeningEngine.reset()
         TrustEngine.reset()
+        AudioAnomalyEngine.reset()
     }
 
     fun toggleBox() {
