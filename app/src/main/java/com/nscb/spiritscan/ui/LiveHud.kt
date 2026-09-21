@@ -260,6 +260,7 @@ fun LiveHud(vm: ScanViewModel) {
     val optFlow by vm.optFlow.collectAsState()
     val denseFlow by vm.denseFlow.collectAsState()
     val focusGate by vm.focusGate.collectAsState()
+    val marsOod by vm.marsOod.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -272,7 +273,7 @@ fun LiveHud(vm: ScanViewModel) {
     val alert = isAnomalyAlert(output, residFilter) ||
         (audioAnom?.unknown == true) ||
         (visionAnom?.unknown == true && residFilter?.active == true) ||
-        (denseFlow?.unknown == true && residFilter?.active == true)
+        (denseFlow?.unknown == true && residFilter?.active == true) || (marsOod?.isOod == true && residFilter?.active == true)
     val pulse = rememberInfiniteTransition(label = "pulse")
     val blink by pulse.animateFloat(
         initialValue = 0.35f,
@@ -601,6 +602,17 @@ fun LiveHud(vm: ScanViewModel) {
                             fontSize = 11.sp
                         )
                         Text(fg.note, color = Mute, fontSize = 10.sp)
+                    }
+                    val mo = marsOod
+                    if (mo != null) {
+                        Text(
+                            "MARS score ${"%.1f".format(mo.score)}  ${if (mo.isOod) "OOD" else "in-dist"}  res ${"%.2f".format(mo.residualEnergy)}",
+                            color = if (mo.isOod) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                    } else {
+                        Text("MARS — waiting / no model", color = Mute, fontSize = 10.sp)
                     }
                 }
             }
