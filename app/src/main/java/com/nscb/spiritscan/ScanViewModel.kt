@@ -37,6 +37,7 @@ import com.nscb.spiritscan.engines.TrustState
 import com.nscb.spiritscan.entity.EntityEngine
 import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.entity.SurveySnap
+import com.nscb.spiritscan.sensor.MicMonitor
 import com.nscb.spiritscan.sensor.SensorStreamManager
 import com.nscb.spiritscan.sensor.SpiritBox
 import com.nscb.spiritscan.sensor.SweepMode
@@ -53,6 +54,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val engine = EntityEngine()
     private val box = SpiritBox()
     private var sensors: SensorStreamManager? = null
+    private var mic: MicMonitor? = null
 
     private val fusionEngine = FusionEngine()
     private val hudEngine = HudEngine()
@@ -154,6 +156,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        if (mic == null) {
+            try {
+                mic = MicMonitor().also { it.start() }
+            } catch (_: Exception) {
+            }
+        }
+
         var processing = false
 
         sensors = SensorStreamManager(ctx) { sample ->
@@ -234,8 +243,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         null
                     }
 
+                    val micRms = mic?.rms ?: 0f
+                    // Prefer live mic; fall back to box RMS when mic unavailable
+                    val audioLevel = if (micRms > 0.0001f) micRms else box.rms
                     val audioAnomState = try {
-                        AudioAnomalyEngine.evaluate(box.rms, _boxOn.value, noiseState?.dominant)
+                        AudioAnomalyEngine.evaluate(audioLevel, _boxOn.value, noiseState?.dominant)
                     } catch (_: Exception) {
                         null
                     }
@@ -322,6 +334,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         sensors?.stop()
         box.stop()
+        try {
+            mic?.stop()
+        } catch (_: Exception) {
+        }
+        mic = null
         try {
             audioEngine?.release()
         } catch (_: Exception) {
