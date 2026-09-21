@@ -29,7 +29,7 @@ data class DetectedObjectBox(
  * Optional TFLite model can be added later under assets/models/vision_ood.tflite.
  */
 class SpiritObjectDetector(
-    private val onResult: (boxes: List<DetectedObjectBox>, frameResidual: Float) -> Unit
+    private val onResult: (boxes: List<DetectedObjectBox>, frameResidual: Float, lumGrid: FloatArray?) -> Unit
 ) : ImageAnalysis.Analyzer {
 
     private val detector: ObjectDetector = ObjectDetection.getClient(
@@ -129,7 +129,7 @@ class SpiritObjectDetector(
         if (mediaImage == null) {
             busy.set(false)
             imageProxy.close()
-            onResult(emptyList(), residual)
+            onResult(emptyList(), residual, lastGrid)
             return
         }
 
@@ -161,10 +161,10 @@ class SpiritObjectDetector(
                         )
                     )
                 }
-                onResult(boxes, residual)
+                onResult(boxes, residual, lastGrid)
             }
             .addOnFailureListener {
-                onResult(emptyList(), residual)
+                onResult(emptyList(), residual, lastGrid)
             }
             .addOnCompleteListener {
                 busy.set(false)
