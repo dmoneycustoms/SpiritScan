@@ -11,8 +11,8 @@ android {
         applicationId = "com.nscb.spiritscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 85
-        versionName = "8.5.0-heavy"
+        versionCode = 86
+        versionName = "8.6.0-mars"
     }
     buildTypes {
         release {
@@ -47,6 +47,8 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.4")
     // ML Kit object detection (on-device)
     implementation("com.google.mlkit:object-detection:17.0.1")
+    // MaRS OOD ONNX
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.3")
     // TFLite runner is a stub until vision_ood.tflite + Interpreter are wired
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
