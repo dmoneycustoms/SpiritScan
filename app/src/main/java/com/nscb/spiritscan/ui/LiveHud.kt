@@ -245,12 +245,18 @@ fun LiveHud(vm: ScanViewModel) {
     val fiveW by vm.fiveW.collectAsState()
     val residFilter by vm.residFilter.collectAsState()
     val spectral by vm.spectral.collectAsState()
+    val audioAnom by vm.audioAnom.collectAsState()
+    val visionAnom by vm.visionAnom.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
     var objects by remember { mutableStateOf<List<DetectedObjectBox>>(emptyList()) }
+    // push OOD path into ViewModel
+    androidx.compose.runtime.LaunchedEffect(objects) {
+        vm.onDetectedObjects(objects)
+    }
 
-    val alert = isAnomalyAlert(output, residFilter)
+    val alert = isAnomalyAlert(output, residFilter) || (audioAnom?.unknown == true) || (visionAnom?.unknown == true && residFilter?.active == true)
     val pulse = rememberInfiniteTransition(label = "pulse")
     val blink by pulse.animateFloat(
         initialValue = 0.35f,
@@ -503,6 +509,44 @@ fun LiveHud(vm: ScanViewModel) {
                         color = Fg, fontFamily = FontFamily.Monospace, fontSize = 10.sp
                     )
                     Text(sp.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // UNKNOWN A/V (audio baseline + vision OOD)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("UNKNOWN A/V", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val aa = audioAnom
+                val va = visionAnom
+                if (aa == null && va == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    if (aa != null) {
+                        Text(
+                            "AUDIO z ${"%.1f".format(aa.zScore)}  ${if (aa.unknown) "UNKNOWN SPIKE" else "baseline ok"}",
+                            color = if (aa.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(aa.note, color = Mute, fontSize = 10.sp)
+                    }
+                    if (va != null) {
+                        Text(
+                            "VISION ood ${va.unknownCount}  ${if (va.unknown) "UNKNOWN" else "clear"}",
+                            color = if (va.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        if (va.labels.isNotEmpty()) {
+                            Text(va.labels.joinToString(", "), color = Mute, fontSize = 10.sp)
+                        }
+                        Text(va.note, color = Mute, fontSize = 10.sp)
+                    }
                 }
             }
 
