@@ -19,17 +19,15 @@ data class DetectedObjectBox(
     val label: String,
     val confidence: Float,
     val trackingId: Int = -1,
-    /** true when classifier is weak / unlabeled → OOD candidate */
     val isOod: Boolean = false
 )
 
 /**
- * ML Kit stream detector + lightweight frame residual (background subtraction proxy).
- * OOD = low confidence or no useful label (Part 2.1 style without custom TFLite weights).
- * Optional TFLite model can be added later under assets/models/vision_ood.tflite.
+ * ML Kit detector + luminance grid residual for dense flow.
+ * Callback: (boxes, frameResidual, lumGrid)
  */
 class SpiritObjectDetector(
-    private val onResult: (boxes: List<DetectedObjectBox>, frameResidual: Float, lumGrid: FloatArray?) -> Unit
+    private val onResult: (List<DetectedObjectBox>, Float, FloatArray?) -> Unit
 ) : ImageAnalysis.Analyzer {
 
     private val detector: ObjectDetector = ObjectDetection.getClient(
@@ -41,14 +39,12 @@ class SpiritObjectDetector(
     )
 
     private val busy = AtomicBoolean(false)
-
-    // Rolling luminance grid for background subtraction (8x8)
     private var bg: FloatArray? = null
     private val gridN = 8
+    @Volatile private var lastGrid: FloatArray? = null
 
     private fun cleanLabel(raw: String?, trackingId: Int?, conf: Float): Pair<String, Boolean> {
         val id = trackingId?.toString() ?: "?"
-        // ML Kit often returns tracked regions with no class (conf=0) — that is tracking, not OOD
         if (raw.isNullOrBlank() && conf < 0.05f) {
             return "track #$id" to false
         }
@@ -66,7 +62,6 @@ class SpiritObjectDetector(
         return "$mapped #$id" to (conf < 0.45f)
     }
 
-    /** Downsample Y plane → residual vs rolling background */
     private fun frameResidual(imageProxy: ImageProxy): Float {
         return try {
             val y = imageProxy.planes[0].buffer
@@ -82,7 +77,6 @@ class SpiritObjectDetector(
                     var count = 0
                     val x0 = gx * cellW
                     val y0 = gy * cellH
-                    // sparse sample inside cell
                     var yy = y0
                     while (yy < y0 + cellH && yy < h) {
                         var xx = x0
@@ -99,6 +93,7 @@ class SpiritObjectDetector(
                     grid[gy * gridN + gx] = if (count > 0) sum.toFloat() / count / 255f else 0f
                 }
             }
+            lastGrid = grid
             val prev = bg
             if (prev == null || prev.size != grid.size) {
                 bg = grid.copyOf()
@@ -107,7 +102,6 @@ class SpiritObjectDetector(
             var diff = 0f
             for (i in grid.indices) {
                 diff += abs(grid[i] - prev[i])
-                // slow background adapt
                 prev[i] = prev[i] * 0.92f + grid[i] * 0.08f
             }
             (diff / grid.size).coerceIn(0f, 1f)
@@ -124,12 +118,13 @@ class SpiritObjectDetector(
         }
 
         val residual = frameResidual(imageProxy)
+        val gridSnap = lastGrid
 
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
             busy.set(false)
             imageProxy.close()
-            onResult(emptyList(), residual, lastGrid)
+            onResult(emptyList(), residual, gridSnap)
             return
         }
 
@@ -161,10 +156,10 @@ class SpiritObjectDetector(
                         )
                     )
                 }
-                onResult(boxes, residual, lastGrid)
+                onResult(boxes, residual, gridSnap)
             }
             .addOnFailureListener {
-                onResult(emptyList(), residual, lastGrid)
+                onResult(emptyList(), residual, gridSnap)
             }
             .addOnCompleteListener {
                 busy.set(false)
