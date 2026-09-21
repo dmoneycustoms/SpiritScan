@@ -164,7 +164,8 @@ fun SpiritTheme(content: @Composable () -> Unit) {
 private fun CameraWithDetection(
     modifier: Modifier = Modifier,
     onObjects: (List<DetectedObjectBox>) -> Unit,
-    onFrameResidual: (Float) -> Unit = {}
+    onFrameResidual: (Float) -> Unit = {},
+    onLumGrid: (FloatArray?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -172,13 +173,13 @@ private fun CameraWithDetection(
     // Throttle UI updates to ~4 Hz — stops screen shake from every-frame ML results
     val detector = remember {
         var lastMs = 0L
-        SpiritObjectDetector { boxes, frameResidual ->
+        SpiritObjectDetector { boxes, frameResidual, lumGrid ->
             val now = System.currentTimeMillis()
             if (now - lastMs >= 250L) {
                 lastMs = now
                 onObjects(boxes)
-                // soft residual into VM via objects path; residual also on each box push
                 onFrameResidual(frameResidual)
+                onLumGrid(lumGrid)
             }
         }
     }
@@ -251,6 +252,8 @@ fun LiveHud(vm: ScanViewModel) {
     val audioAnom by vm.audioAnom.collectAsState()
     val visionAnom by vm.visionAnom.collectAsState()
     val optFlow by vm.optFlow.collectAsState()
+    val denseFlow by vm.denseFlow.collectAsState()
+    val focusGate by vm.focusGate.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -260,7 +263,7 @@ fun LiveHud(vm: ScanViewModel) {
         vm.onDetectedObjects(objects)
     }
 
-    val alert = isAnomalyAlert(output, residFilter) || (audioAnom?.unknown == true) || (visionAnom?.unknown == true && residFilter?.active == true) || (optFlow?.unknown == true)
+    val alert = isAnomalyAlert(output, residFilter) || (audioAnom?.unknown == true) || (visionAnom?.unknown == true && residFilter?.active == true) || (optFlow?.unknown == true) || (denseFlow?.unknown == true && focusGate?.dustLikely != true)
     val pulse = rememberInfiniteTransition(label = "pulse")
     val blink by pulse.animateFloat(
         initialValue = 0.35f,
@@ -350,7 +353,8 @@ fun LiveHud(vm: ScanViewModel) {
             CameraWithDetection(
                 modifier = Modifier.fillMaxSize(),
                 onObjects = { objects = it },
-                onFrameResidual = { r -> vm.onVisionFrame(r) }
+                onFrameResidual = { r -> vm.onVisionFrame(r) },
+                onLumGrid = { g -> vm.onLumGrid(g) }
             )
 
             when (filter) {
@@ -568,6 +572,26 @@ fun LiveHud(vm: ScanViewModel) {
                             color = if (of.unknown) Danger else Mute,
                             fontSize = 10.sp
                         )
+                    }
+                    val df = denseFlow
+                    if (df != null) {
+                        Text(
+                            "DENSE flow ${"%.0f".format(df.flowEnergy * 100)}%  indep ${"%.0f".format(df.independentFlow * 100)}%",
+                            color = if (df.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(df.note, color = if (df.unknown) Danger else Mute, fontSize = 10.sp)
+                    }
+                    val fg = focusGate
+                    if (fg != null) {
+                        Text(
+                            "FOCUS ${if (fg.focusAvailable) "%.1f D".format(fg.focusDiopters) else "n/a"}  ${if (fg.dustLikely) "DUST LIKELY" else "ok"}",
+                            color = if (fg.dustLikely) Mute else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(fg.note, color = Mute, fontSize = 10.sp)
                     }
                 }
             }
