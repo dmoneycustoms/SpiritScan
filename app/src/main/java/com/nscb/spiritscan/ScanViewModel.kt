@@ -30,6 +30,8 @@ import com.nscb.spiritscan.engines.AudioAnomalyEngine
 import com.nscb.spiritscan.engines.AudioAnomalyState
 import com.nscb.spiritscan.engines.SpectralEngine
 import com.nscb.spiritscan.engines.SpectralState
+import com.nscb.spiritscan.engines.OpticalFlowEngine
+import com.nscb.spiritscan.engines.OpticalFlowState
 import com.nscb.spiritscan.engines.VisionAnomalyEngine
 import com.nscb.spiritscan.engines.VisionAnomalyState
 import com.nscb.spiritscan.engines.TrustEngine
@@ -122,6 +124,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _visionAnom = MutableStateFlow<VisionAnomalyState?>(null)
     val visionAnom: StateFlow<VisionAnomalyState?> = _visionAnom
 
+    private val _optFlow = MutableStateFlow<OpticalFlowState?>(null)
+    val optFlow: StateFlow<OpticalFlowState?> = _optFlow
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -133,7 +138,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         val noiseDom = _noise.value?.dominant
         val residAct = _residFilter.value?.active == true
         _visionAnom.value = try {
-            VisionAnomalyEngine.evaluate(boxes, visionResidual, noiseDom, residAct)
+            VisionAnomalyEngine.evaluate(boxes, visionResidual, noiseDom, residAct, visionResidual)
         } catch (_: Exception) {
             _visionAnom.value
         }
@@ -257,8 +262,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                             objects = emptyList(),
                             visResidual = visionResidual,
                             noiseDominant = noiseState?.dominant,
-                            residUnknownActive = residFilterState?.active == true
+                            residUnknownActive = residFilterState?.active == true,
+                            frameResidual = visionResidual
                         )
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    val optFlowState = try {
+                        OpticalFlowEngine.evaluate(sample, visionResidual, noiseState?.dominant)
                     } catch (_: Exception) {
                         null
                     }
@@ -277,6 +289,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         _spectral.value = spectralState
                         _audioAnom.value = audioAnomState
                         _visionAnom.value = visionAnomState
+                        _optFlow.value = optFlowState
                         _hud.value = hudEngine.build(_currentMode.value.name, out, fused)
                         _diag.value = diagEngine.build(out, fused, fusionNs)
                         _perf.value = perfEngine.buildState(
