@@ -91,8 +91,8 @@ object QidaDecisionEngine {
         val maxConf = amps[primaryIdx]
 
         // 3CAI-style gates: confidence + trust thresholds
-        val confOk = confRaw >= 0.40f && maxConf >= 0.28f
-        val trustOk = t >= 0.35f
+        val confOk = confRaw >= 0.32f && maxConf >= 0.22f
+        val trustOk = t >= 0.28f
         val collapseOk = confOk && trustOk && (trust?.gateOpen != false)
 
         // Weighted decision score
@@ -100,7 +100,8 @@ object QidaDecisionEngine {
 
         val note = when {
             !collapseOk && !trustOk -> "Hold — trust below threshold"
-            !collapseOk && !confOk -> "Hold — confidence weak"
+            !collapseOk && !confOk -> "Hold — weak collapse margin"
+            !collapseOk && confOk && !trustOk -> "Hold — trust below threshold"
             primary == "ATTENTION" -> "Collapse → ATTENTION"
             primary == "QUIET" && collapseOk -> "Collapse → QUIET (clean)"
             else -> "Collapse → $primary"
