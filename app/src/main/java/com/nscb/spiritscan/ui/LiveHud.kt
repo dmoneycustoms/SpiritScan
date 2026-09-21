@@ -163,7 +163,8 @@ fun SpiritTheme(content: @Composable () -> Unit) {
 @Composable
 private fun CameraWithDetection(
     modifier: Modifier = Modifier,
-    onObjects: (List<DetectedObjectBox>) -> Unit
+    onObjects: (List<DetectedObjectBox>) -> Unit,
+    onFrameResidual: (Float) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -171,11 +172,13 @@ private fun CameraWithDetection(
     // Throttle UI updates to ~4 Hz — stops screen shake from every-frame ML results
     val detector = remember {
         var lastMs = 0L
-        SpiritObjectDetector { boxes ->
+        SpiritObjectDetector { boxes, frameResidual ->
             val now = System.currentTimeMillis()
             if (now - lastMs >= 250L) {
                 lastMs = now
                 onObjects(boxes)
+                // soft residual into VM via objects path; residual also on each box push
+                onFrameResidual(frameResidual)
             }
         }
     }
@@ -345,7 +348,8 @@ fun LiveHud(vm: ScanViewModel) {
         ) {
             CameraWithDetection(
                 modifier = Modifier.fillMaxSize(),
-                onObjects = { objects = it }
+                onObjects = { objects = it },
+                onFrameResidual = { r -> vm.onVisionFrame(r) }
             )
 
             when (filter) {
