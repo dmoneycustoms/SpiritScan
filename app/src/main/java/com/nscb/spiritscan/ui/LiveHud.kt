@@ -263,7 +263,10 @@ fun LiveHud(vm: ScanViewModel) {
         vm.onDetectedObjects(objects)
     }
 
-    val alert = isAnomalyAlert(output, residFilter) || (audioAnom?.unknown == true) || (visionAnom?.unknown == true && residFilter?.active == true) || (optFlow?.unknown == true) || (denseFlow?.unknown == true && focusGate?.dustLikely != true)
+    val alert = isAnomalyAlert(output, residFilter) ||
+        (audioAnom?.unknown == true) ||
+        (visionAnom?.unknown == true && residFilter?.active == true) ||
+        (denseFlow?.unknown == true && residFilter?.active == true)
     val pulse = rememberInfiniteTransition(label = "pulse")
     val blink by pulse.animateFloat(
         initialValue = 0.35f,
