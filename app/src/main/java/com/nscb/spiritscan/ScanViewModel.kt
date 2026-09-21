@@ -44,6 +44,8 @@ import com.nscb.spiritscan.entity.EntityEngine
 import com.nscb.spiritscan.entity.EntityOutput
 import com.nscb.spiritscan.entity.SurveySnap
 import com.nscb.spiritscan.sensor.MicMonitor
+import com.nscb.spiritscan.vision.MarsOodResult
+import com.nscb.spiritscan.vision.MarsOodRunner
 import com.nscb.spiritscan.sensor.SensorStreamManager
 import com.nscb.spiritscan.sensor.SpiritBox
 import com.nscb.spiritscan.sensor.SweepMode
@@ -137,6 +139,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _focusGate = MutableStateFlow<FocusGateState?>(null)
     val focusGate: StateFlow<FocusGateState?> = _focusGate
 
+    private val _marsOod = MutableStateFlow<MarsOodResult?>(null)
+    val marsOod: StateFlow<MarsOodResult?> = _marsOod
+
+    private var marsRunner: MarsOodRunner? = null
+
     @Volatile private var lastLumGrid: FloatArray? = null
     @Volatile private var lastSample: com.nscb.spiritscan.sensor.Sample9? = null
 
@@ -176,6 +183,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {
             null
         }
+        // MaRS OOD on luminance grid (throttled by vision ~4Hz)
+        _marsOod.value = try {
+            marsRunner?.evaluate(grid)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun setMode(mode: ScanMode) {
@@ -198,6 +211,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         if (mic == null) {
             try {
                 mic = MicMonitor().also { it.start() }
+            } catch (_: Exception) {
+            }
+        }
+
+        if (marsRunner == null) {
+            try {
+                marsRunner = MarsOodRunner(appContext)
             } catch (_: Exception) {
             }
         }
@@ -388,6 +408,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {
         }
         mic = null
+        try {
+            marsRunner?.close()
+        } catch (_: Exception) {
+        }
+        marsRunner = null
         try {
             audioEngine?.release()
         } catch (_: Exception) {
