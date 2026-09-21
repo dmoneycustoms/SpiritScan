@@ -47,10 +47,6 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.4")
     // ML Kit object detection (on-device)
     implementation("com.google.mlkit:object-detection:17.0.1")
-    // TFLite optional OOD model (assets/models/vision_ood.tflite)
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
-    // Camera2 interop for focus distance
-    implementation("androidx.camera:camera-camera2:1.3.4")
+    // TFLite runner is a stub until vision_ood.tflite + Interpreter are wired
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
