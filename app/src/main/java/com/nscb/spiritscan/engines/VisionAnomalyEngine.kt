@@ -3,17 +3,15 @@ package com.nscb.spiritscan.engines
 import com.nscb.spiritscan.vision.DetectedObjectBox
 
 /**
- * Unknown visual anomaly (Part 2 lite):
- *  - OOD: ML Kit boxes with low confidence or empty labels → unknown
- *  - Residual frame energy (visResidual) only when not motion-dominated
- *  - Dust/orb heuristic: very small boxes discounted
- *
- * Full autoencoder / dual-pixel focus not available via CameraX defaults —
- * this is the production-practical subset for S23.
+ * Unknown visual anomaly:
+ *  - OOD boxes (isOod / low conf)
+ *  - Background-subtraction frame residual (motion-gated)
+ *  - Tiny boxes discounted (dust-like)
  */
 data class VisionAnomalyState(
     val unknownCount: Int,
     val residualActive: Boolean,
+    val frameResidual: Float,
     val unknown: Boolean,
     val labels: List<String>,
     val note: String
@@ -21,43 +19,40 @@ data class VisionAnomalyState(
 
 object VisionAnomalyEngine {
 
-    private const val OOD_CONF = 0.30f
-    private const val MIN_BOX_AREA = 0.004f  // fraction of frame — tiny = dust-like
+    private const val MIN_BOX_AREA = 0.004f
+    private const val RES_THRESH = 0.08f
 
     fun evaluate(
         objects: List<DetectedObjectBox>,
         visResidual: Float,
         noiseDominant: String? = null,
-        residUnknownActive: Boolean = false
+        residUnknownActive: Boolean = false,
+        frameResidual: Float = 0f
     ): VisionAnomalyState {
         val motion = noiseDominant == "MOTION"
         val ood = objects.filter { box ->
             val w = (box.right - box.left).coerceAtLeast(0f)
             val h = (box.bottom - box.top).coerceAtLeast(0f)
             val area = w * h
-            val lowConf = box.confidence < OOD_CONF
-            val noLabel = box.label.isBlank() ||
-                box.label.equals("unknown", true) ||
-                box.label.equals("object", true) ||
-                box.label.startsWith("obj", true)
-            area >= MIN_BOX_AREA && (lowConf || noLabel)
+            area >= MIN_BOX_AREA && (box.isOod || box.confidence < 0.30f ||
+                box.label.startsWith("unknown", true) || box.label.startsWith("obj", true))
         }
 
-        // Residual path: vision residual only if phone not swinging
-        val residualActive = !motion && visResidual > 0.12f
+        val res = maxOf(visResidual, frameResidual)
+        val residualActive = !motion && res >= RES_THRESH
 
-        val unknown = ood.isNotEmpty() || residualActive || residUnknownActive
+        val unknown = (!motion && ood.isNotEmpty()) || residualActive ||
+            (residUnknownActive && !motion)
 
         val labels = ood.take(4).map {
             val c = (it.confidence * 100).toInt()
-            val name = it.label.ifBlank { "ood" }
-            "$name $c%"
+            "${it.label} $c%"
         }
 
         val note = when {
-            motion -> "Vision anomalies gated — phone motion"
-            ood.isNotEmpty() -> "OOD objects: ${ood.size} low-confidence/unknown"
-            residualActive -> "Frame residual elevated (non-motion)"
+            motion -> "Vision gated — phone motion"
+            ood.isNotEmpty() -> "OOD: ${ood.size} unknown/low-conf object(s)"
+            residualActive -> "Frame residual ${"%.2f".format(res)} (bg subtract)"
             residUnknownActive -> "Mag unknown residual co-active"
             else -> "No unknown visual anomaly"
         }
@@ -65,6 +60,7 @@ object VisionAnomalyEngine {
         return VisionAnomalyState(
             unknownCount = ood.size,
             residualActive = residualActive,
+            frameResidual = res,
             unknown = unknown,
             labels = labels,
             note = note
