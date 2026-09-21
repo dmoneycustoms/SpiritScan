@@ -403,9 +403,12 @@ fun LiveHud(vm: ScanViewModel) {
                     .padding(10.dp)
             ) {
                 Text("MODEL OUTPUTS", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                // Prefer hardened stable label — raw Jones often sticks on device_interference indoors
+                val jLabel = hard?.stableLabel ?: output.jonesLabel
+                val jScore = hard?.stableScore ?: output.jonesScore
                 Text(
-                    "Jones ${output.jonesLabel} ${(output.jonesScore * 100).toInt()}%",
-                    color = if (output.jonesScore > 0.7f) Danger else Fg,
+                    "Jones ${jLabel} ${(jScore * 100).toInt()}%${if (hard?.mitigated == true) " · gated" else ""}",
+                    color = if (jLabel.contains("device") || jLabel.contains("entity")) Danger else Fg,
                     fontFamily = FontFamily.Monospace, fontSize = 12.sp
                 )
                 Text(
