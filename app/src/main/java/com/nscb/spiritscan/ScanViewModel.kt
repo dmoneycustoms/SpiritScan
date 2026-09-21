@@ -30,6 +30,10 @@ import com.nscb.spiritscan.engines.AudioAnomalyEngine
 import com.nscb.spiritscan.engines.AudioAnomalyState
 import com.nscb.spiritscan.engines.SpectralEngine
 import com.nscb.spiritscan.engines.SpectralState
+import com.nscb.spiritscan.engines.DenseFlowEngine
+import com.nscb.spiritscan.engines.DenseFlowState
+import com.nscb.spiritscan.engines.FocusGate
+import com.nscb.spiritscan.engines.FocusGateState
 import com.nscb.spiritscan.engines.OpticalFlowEngine
 import com.nscb.spiritscan.engines.OpticalFlowState
 import com.nscb.spiritscan.engines.VisionAnomalyEngine
@@ -127,6 +131,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _optFlow = MutableStateFlow<OpticalFlowState?>(null)
     val optFlow: StateFlow<OpticalFlowState?> = _optFlow
 
+    private val _denseFlow = MutableStateFlow<DenseFlowState?>(null)
+    val denseFlow: StateFlow<DenseFlowState?> = _denseFlow
+
+    private val _focusGate = MutableStateFlow<FocusGateState?>(null)
+    val focusGate: StateFlow<FocusGateState?> = _focusGate
+
+    @Volatile private var lastLumGrid: FloatArray? = null
+    @Volatile private var lastSample: com.nscb.spiritscan.sensor.Sample9? = null
+
     @Volatile
     private var visionResidual: Float = 0.01f
 
@@ -141,6 +154,27 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             VisionAnomalyEngine.evaluate(boxes, visionResidual, noiseDom, residAct, visionResidual)
         } catch (_: Exception) {
             _visionAnom.value
+        }
+        // Focus gate + dense flow refresh on vision tick
+        val of = _optFlow.value
+        _focusGate.value = try {
+            FocusGate.evaluate(
+                frameResidual = visionResidual,
+                oodCount = _visionAnom.value?.unknownCount ?: 0,
+                independentFlow = of?.independentMotion ?: 0f
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun onLumGrid(grid: FloatArray?) {
+        lastLumGrid = grid
+        val noiseDom = _noise.value?.dominant
+        _denseFlow.value = try {
+            DenseFlowEngine.evaluate(grid, lastSample, noiseDom)
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -177,6 +211,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch(Dispatchers.Default) {
                 try {
                     val snap = sensors?.buffer?.snapshot().orEmpty()
+                    lastSample = sample
 
                     val out = engine.process(
                         sample = sample,
@@ -318,6 +353,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         HardeningEngine.reset()
         TrustEngine.reset()
         AudioAnomalyEngine.reset()
+        DenseFlowEngine.reset()
     }
 
     fun toggleBox() {
