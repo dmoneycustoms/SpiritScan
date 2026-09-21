@@ -48,12 +48,15 @@ class SpiritObjectDetector(
 
     private fun cleanLabel(raw: String?, trackingId: Int?, conf: Float): Pair<String, Boolean> {
         val id = trackingId?.toString() ?: "?"
-        val ood = raw.isNullOrBlank() || conf < 0.30f
-        if (ood) {
+        // ML Kit often returns tracked regions with no class (conf=0) — that is tracking, not OOD
+        if (raw.isNullOrBlank() && conf < 0.05f) {
+            return "track #$id" to false
+        }
+        if (raw.isNullOrBlank() || conf < 0.30f) {
             return "unknown #$id" to true
         }
         val mapped = when {
-            raw!!.contains("Home", ignoreCase = true) -> "furniture"
+            raw.contains("Home", ignoreCase = true) -> "furniture"
             raw.contains("Fashion", ignoreCase = true) -> "apparel"
             raw.contains("Food", ignoreCase = true) -> "food"
             raw.contains("Place", ignoreCase = true) -> "place"
