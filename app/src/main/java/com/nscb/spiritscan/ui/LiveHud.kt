@@ -78,6 +78,7 @@ import com.nscb.spiritscan.ui.vision.ObjectOverlay
 import com.nscb.spiritscan.ui.vision.OmegaOverlay
 import com.nscb.spiritscan.ui.vision.UvOverlay
 import com.nscb.spiritscan.vision.DetectedObjectBox
+import com.nscb.spiritscan.camera.FocusCapture
 import com.nscb.spiritscan.vision.SpiritObjectDetector
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -208,9 +209,14 @@ private fun CameraWithDetection(
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
-            val analysis = ImageAnalysis.Builder()
+            val analysisBuilder = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setTargetResolution(android.util.Size(640, 480))
+            try {
+                FocusCapture.attachToAnalysis(analysisBuilder)
+            } catch (_: Exception) {
+            }
+            val analysis = analysisBuilder
                 .build()
                 .also { it.setAnalyzer(analysisExecutor, detector) }
 
