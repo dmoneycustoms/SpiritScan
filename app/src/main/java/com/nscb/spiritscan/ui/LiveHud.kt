@@ -250,6 +250,7 @@ fun LiveHud(vm: ScanViewModel) {
     val spectral by vm.spectral.collectAsState()
     val audioAnom by vm.audioAnom.collectAsState()
     val visionAnom by vm.visionAnom.collectAsState()
+    val optFlow by vm.optFlow.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -259,7 +260,7 @@ fun LiveHud(vm: ScanViewModel) {
         vm.onDetectedObjects(objects)
     }
 
-    val alert = isAnomalyAlert(output, residFilter) || (audioAnom?.unknown == true) || (visionAnom?.unknown == true && residFilter?.active == true)
+    val alert = isAnomalyAlert(output, residFilter) || (audioAnom?.unknown == true) || (visionAnom?.unknown == true && residFilter?.active == true) || (optFlow?.unknown == true)
     val pulse = rememberInfiniteTransition(label = "pulse")
     val blink by pulse.animateFloat(
         initialValue = 0.35f,
@@ -550,6 +551,20 @@ fun LiveHud(vm: ScanViewModel) {
                             Text(va.labels.joinToString(", "), color = Mute, fontSize = 10.sp)
                         }
                         Text(va.note, color = Mute, fontSize = 10.sp)
+                    }
+                    val of = optFlow
+                    if (of != null) {
+                        Text(
+                            "FLOW phone ${"%.0f".format(of.phoneMotion * 100)}%  vis ${"%.0f".format(of.visualMotion * 100)}%  indep ${"%.0f".format(of.independentMotion * 100)}%",
+                            color = if (of.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            if (of.unknown) "INDEPENDENT MOTION" else of.note,
+                            color = if (of.unknown) Danger else Mute,
+                            fontSize = 10.sp
+                        )
                     }
                 }
             }
