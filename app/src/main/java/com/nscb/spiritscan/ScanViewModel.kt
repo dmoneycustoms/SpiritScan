@@ -145,6 +145,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private var marsRunner: MarsOodRunner? = null
 
     @Volatile private var lastLumGrid: FloatArray? = null
+    private val _lumGridFlow = MutableStateFlow<FloatArray?>(null)
+    val lumGrid: StateFlow<FloatArray?> = _lumGridFlow
     @Volatile private var lastSample: com.nscb.spiritscan.sensor.Sample9? = null
 
     @Volatile
@@ -177,6 +179,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onLumGrid(grid: FloatArray?) {
         lastLumGrid = grid
+        _lumGridFlow.value = grid
         val noiseDom = _noise.value?.dominant
         _denseFlow.value = try {
             DenseFlowEngine.evaluate(grid, lastSample, noiseDom)
