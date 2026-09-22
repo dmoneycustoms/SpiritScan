@@ -306,8 +306,20 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     val micRms = mic?.rms ?: 0f
                     // Prefer live mic; fall back to box RMS when mic unavailable
                     val audioLevel = if (micRms > 0.0001f) micRms else box.rms
+                    // Tell mic which hop to notch
+                    try {
+                        mic?.hopFreqHz = box.freq
+                    } catch (_: Exception) {
+                    }
+                    val speechRes = mic?.speechResidual ?: 0f
                     val audioAnomState = try {
-                        AudioAnomalyEngine.evaluate(audioLevel, _boxOn.value, noiseState?.dominant)
+                        AudioAnomalyEngine.evaluate(
+                            rms = audioLevel,
+                            boxOn = _boxOn.value,
+                            noiseDominant = noiseState?.dominant,
+                            speechResidual = speechRes,
+                            hopHz = box.freq
+                        )
                     } catch (_: Exception) {
                         null
                     }
