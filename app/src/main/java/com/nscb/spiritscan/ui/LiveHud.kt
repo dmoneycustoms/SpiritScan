@@ -130,12 +130,12 @@ private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mod
  * MAG path only alerts when |B| >= 80.
  */
 private fun isAnomalyAlert(o: EntityOutput, unknown: ResidualFilterState?): Boolean {
-    // Only alert on: unexplained residual OR extreme out-of-band field
-    // Known noise (wire/motion/phone) must NOT fire the bar
+    // Unexplained residual OR truly abnormal |B| — not high z alone after walking from CAL spot
     if (unknown?.active == true) return true
     val highMag = o.magUt >= 80f
-    val extremeZ = abs(o.zMag) >= 12f && (o.magUt < 30f || o.magUt > 80f)
-    return highMag || extremeZ
+    val lowMag = o.magUt < 22f
+    val extremeZOutOfBand = abs(o.zMag) >= 12f && (o.magUt < 28f || o.magUt > 75f)
+    return highMag || lowMag || extremeZOutOfBand
 }
 
 private fun alertMessage(o: EntityOutput, unknown: ResidualFilterState?): String {
@@ -144,8 +144,10 @@ private fun alertMessage(o: EntityOutput, unknown: ResidualFilterState?): String
             "ALERT · UNKNOWN RESIDUAL ${"%.0f".format((unknown.unknown) * 100)}%"
         o.magUt >= 80f ->
             "ALERT · HIGH FIELD ${"%.0f".format(o.magUt)} µT"
-        abs(o.zMag) >= 10f ->
-            "ALERT · EXTREME Z ${"%.1f".format(o.zMag)}"
+        o.magUt < 22f ->
+            "ALERT · LOW FIELD ${"%.1f".format(o.magUt)} µT"
+        abs(o.zMag) >= 12f && (o.magUt < 28f || o.magUt > 75f) ->
+            "ALERT · EXTREME Z ${"%.1f".format(o.zMag)} @ ${"%.0f".format(o.magUt)}µT"
         else ->
             "ALERT · ANOMALY"
     }
@@ -606,8 +608,8 @@ fun LiveHud(vm: ScanViewModel) {
                     val mo = marsOod
                     if (mo != null) {
                         Text(
-                            "MARS score ${"%.1f".format(mo.score)}  ${if (mo.isOod) "OOD" else "in-dist"}  res ${"%.2f".format(mo.residualEnergy)}",
-                            color = if (mo.isOod) Danger else Fg,
+                            "MARS score ${"%.1f".format(mo.score)}  ${if (mo.isOod) "OOD" else "raw (untrained)"}  res ${"%.2f".format(mo.residualEnergy)}",
+                            color = if (mo.isOod) Danger else Mute,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp
                         )
