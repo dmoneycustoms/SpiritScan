@@ -33,6 +33,7 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 private data class TrailDot(
     val x: Float,
@@ -50,14 +51,47 @@ private data class TrackMem(
     var dwell: Float
 )
 
-/**
- * Enhanced OBJ overlay — per-box footprint ranking:
- *  - track persistence (revisit / dwell)
- *  - in-box motion (center travel)
- *  - region residual proxy (edge vs center bias + global residual)
- *  - global stack energy
- *  - rank badges, face ellipses, plumes, trails, grid, audio ring
- */
+private data class ScoredBox(
+    val index: Int,
+    val box: DetectedObjectBox,
+    val score: Float,
+    val motion: Float,
+    val dwell: Float
+)
+
+/** Mean |cell - globalMean| for grid cells under the box. */
+private fun boxLumResidual(grid: FloatArray?, b: DetectedObjectBox): Float {
+    if (grid == null || grid.isEmpty()) return 0f
+    val side = sqrt(grid.size.toDouble()).toInt().coerceAtLeast(1)
+    if (side * side > grid.size) return 0f
+
+    var mean = 0.0
+    for (v in grid) {
+        mean += v.toDouble()
+    }
+    mean /= grid.size.toDouble()
+
+    val x0 = (b.left * side).toInt().coerceIn(0, side - 1)
+    val x1 = (b.right * side).toInt().coerceIn(0, side - 1)
+    val y0 = (b.top * side).toInt().coerceIn(0, side - 1)
+    val y1 = (b.bottom * side).toInt().coerceIn(0, side - 1)
+    if (x1 < x0 || y1 < y0) return 0f
+
+    var sum = 0.0
+    var n = 0
+    for (y in y0..y1) {
+        for (x in x0..x1) {
+            val i = y * side + x
+            if (i in grid.indices) {
+                sum += abs(grid[i] - mean)
+                n++
+            }
+        }
+    }
+    if (n == 0) return 0f
+    return ((sum / n) * 4.0).toFloat().coerceIn(0f, 1f)
+}
+
 @Composable
 fun ObjectOverlay(
     boxes: List<DetectedObjectBox>,
@@ -67,7 +101,7 @@ fun ObjectOverlay(
     gridHeat: Boolean = true,
     lumGrid: FloatArray? = null
 ) {
-    val global = (
+    val global: Float = (
         output.qida * 0.2f +
             output.residualLevel * 0.35f +
             (abs(output.zMag) / 12f).coerceIn(0f, 1f) * 0.2f +
@@ -108,10 +142,7 @@ fun ObjectOverlay(
     val measurer = rememberTextMeasurer()
     val now = System.currentTimeMillis()
 
-    // Update track memory + per-box footprint scores
-    data class Scored(val index: Int, val box: DetectedObjectBox, val score: Float, val motion: Float, val dwell: Float)
-
-    val scored = ArrayList<Scored>(boxes.size)
+    val scored = ArrayList<ScoredBox>(boxes.size)
     val seen = HashSet<Int>()
 
     for ((index, b) in boxes.withIndex()) {
@@ -121,86 +152,88 @@ fun ObjectOverlay(
         val cy = (b.top + b.bottom) * 0.5f
         val area = ((b.right - b.left) * (b.bottom - b.top)).coerceAtLeast(0.001f)
 
-        val mem = tracks[tid]
+        val existing = tracks[tid]
         val motion: Float
         val dwell: Float
-        if (mem == null) {
+        if (existing == null) {
             tracks[tid] = TrackMem(cx, cy, 1, now, 0f, 0.15f)
             motion = 0f
             dwell = 0.15f
         } else {
-            val dist = hypot(cx - mem.cx, cy - mem.cy)
-            // Normalized motion: large jump in normalized frame coords
-            motion = (dist * 8f).coerceIn(0f, 1f) * 0.65f + mem.motion * 0.35f
-            val dt = (now - mem.lastMs).coerceAtLeast(1L)
-            // Dwell rises when box stays put and keeps being detected
+            val dist = hypot(cx - existing.cx, cy - existing.cy)
+            motion = (dist * 8f).coerceIn(0f, 1f) * 0.65f + existing.motion * 0.35f
             val stillBoost = if (dist < 0.02f) 0.04f else -0.02f
-            dwell = (mem.dwell + stillBoost + 0.01f).coerceIn(0.05f, 1f)
-            mem.cx = cx
-            mem.cy = cy
-            mem.hits = (mem.hits + 1).coerceAtMost(500)
-            mem.lastMs = now
-            mem.motion = motion
-            mem.dwell = dwell
+            dwell = (existing.dwell + stillBoost + 0.01f).coerceIn(0.05f, 1f)
+            existing.cx = cx
+            existing.cy = cy
+            existing.hits = (existing.hits + 1).coerceAtMost(500)
+            existing.lastMs = now
+            existing.motion = motion
+            existing.dwell = dwell
         }
 
         val hits = tracks[tid]?.hits ?: 1
         val persistence = (hits / 40f).coerceIn(0f, 1f)
-
-        // True-ish region residual from luminance grid cells under this box
         val boxResidual = boxLumResidual(lumGrid, b)
-        val regionResidual = (
+        val regionResidual: Float = (
             boxResidual * 0.55f +
                 output.residualLevel * 0.2f * (0.5f + 0.5f * persistence) +
                 motion * 0.15f +
                 dwell * 0.10f
             ).coerceIn(0f, 1f)
 
-        // Footprint score — emphasizes dwell + revisit + local residual, not only box size
-        val score = (
+        val conf = b.confidence.coerceIn(0f, 1f)
+        val score: Float = (
             global * 0.25f +
                 regionResidual * 0.35f +
                 dwell * 0.2f +
                 persistence * 0.12f +
-                b.confidence.coerceIn(0f, 1f) * 0.08f
+                conf * 0.08f
             ).coerceIn(0f, 1f) * (0.85f + area.coerceAtMost(0.4f))
 
-        scored.add(Scored(index, b, score, motion, dwell))
+        scored.add(ScoredBox(index, b, score, motion, dwell))
     }
 
-    // Decay tracks not seen
-    val stale = tracks.keys.filter { it !in seen && (now - (tracks[it]?.lastMs ?: 0L)) > 3000L }
-    stale.forEach { tracks.remove(it) }
+    val staleKeys = tracks.keys.filter { key ->
+        key !in seen && (now - (tracks[key]?.lastMs ?: 0L)) > 3000L
+    }
+    for (k in staleKeys) {
+        tracks.remove(k)
+    }
 
     val ranked = scored.sortedByDescending { it.score }
     val rankOf = IntArray(boxes.size) { -1 }
-    ranked.take(3).forEachIndexed { rank, s -> rankOf[s.index] = rank + 1 }
-    val scoreOf = FloatArray(boxes.size) { 0f }
-    for (s in scored) scoreOf[s.index] = s.score
+    ranked.take(3).forEachIndexed { rank, s ->
+        rankOf[s.index] = rank + 1
+    }
+    val scoreOf = FloatArray(boxes.size)
+    for (s in scored) {
+        scoreOf[s.index] = s.score
+    }
 
     Canvas(Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
         val twoPi = (2.0 * PI).toFloat()
 
-        // Grid heat weighted by top footprint
-        val heat = (ranked.firstOrNull()?.score ?: global)
+        val heat = ranked.firstOrNull()?.score ?: global
         if (gridHeat && heat > 0.12f) {
             val gx = 8
             val gy = 6
             val cellW = w / gx
             val cellH = h / gy
-            // Stronger cells near ranked box centers
-            val centers = ranked.take(3).map {
-                Offset((it.box.left + it.box.right) * 0.5f * w, (it.box.top + it.box.bottom) * 0.5f * h) to it.score
+            val centers = ranked.take(3).map { s ->
+                val bx = (s.box.left + s.box.right) * 0.5f * w
+                val by = (s.box.top + s.box.bottom) * 0.5f * h
+                Offset(bx, by) to s.score
             }
             for (iy in 0 until gy) {
                 for (ix in 0 until gx) {
-                    val cx = (ix + 0.5f) * cellW
-                    val cy = (iy + 0.5f) * cellH
+                    val cellCx = (ix + 0.5f) * cellW
+                    val cellCy = (iy + 0.5f) * cellH
                     var a = heat * 0.06f
                     for ((c, s) in centers) {
-                        val d = hypot(cx - c.x, cy - c.y) / (min(w, h) * 0.45f)
+                        val d = hypot(cellCx - c.x, cellCy - c.y) / (min(w, h) * 0.45f)
                         a += s * 0.2f * (1f - d.coerceIn(0f, 1f))
                     }
                     a = a.coerceIn(0f, 0.28f)
@@ -215,7 +248,7 @@ fun ObjectOverlay(
             }
         }
 
-        trails.removeAll { now - it.bornMs > 2800L }
+        trails.removeAll { dot -> now - dot.bornMs > 2800L }
         for (t in trails) {
             val age = (now - t.bornMs) / 2800f
             val a = ((1f - age) * 0.4f * t.strength).coerceIn(0f, 0.4f)
@@ -236,8 +269,7 @@ fun ObjectOverlay(
             val cx = (left + right) / 2f
             val cy = (top + bottom) / 2f
             val rank = if (idx < rankOf.size) rankOf[idx] else -1
-            val fp = if (idx < scoreOf.size) scoreOf[idx] else 0f
-            val localEnergy = fp.coerceIn(0f, 1f)
+            val localEnergy = if (idx < scoreOf.size) scoreOf[idx] else 0f
 
             drawRect(
                 color = Color(0xFF00E5A0).copy(alpha = 0.85f),
@@ -270,8 +302,9 @@ fun ObjectOverlay(
             }
 
             val rankTag = if (rank in 1..3) " #$rank" else ""
-            val pct = (localEnergy * 100).toInt()
-            val label = "${b.label} ${"%.0f".format(b.confidence * 100)}%$rankTag fp$pct"
+            val pct = (localEnergy * 100f).toInt()
+            val confPct = (b.confidence * 100f).toInt()
+            val label = "${b.label} $confPct%$rankTag fp$pct"
             val layout = measurer.measure(
                 label,
                 style = TextStyle(color = Color.White, fontSize = 10.sp)
@@ -328,29 +361,31 @@ fun ObjectOverlay(
                     center = Offset(px, py)
                 )
 
-                if (rank in 1..3 && (phase * 20).toInt() % 4 == 0) {
+                if (rank in 1..3 && (phase * 20f).toInt() % 4 == 0) {
                     val nx = (px / w).coerceIn(0f, 1f)
                     val ny = (py / h).coerceIn(0f, 1f)
-                    if (trails.size >= 64) trails.removeAt(0)
+                    if (trails.size >= 64) {
+                        trails.removeAt(0)
+                    }
                     trails.add(TrailDot(nx, ny, localEnergy, now))
                 }
             }
         }
 
         if (audioSpike) {
-            val cx = w * 0.5f
-            val cy = h * 0.5f
-            val r = min(w, h) * (0.28f + 0.08f * ringPulse)
+            val rcx = w * 0.5f
+            val rcy = h * 0.5f
+            val rr = min(w, h) * (0.28f + 0.08f * ringPulse)
             drawCircle(
                 color = Color(0.2f, 0.9f, 1f, 0.55f * ringPulse),
-                radius = r,
-                center = Offset(cx, cy),
+                radius = rr,
+                center = Offset(rcx, rcy),
                 style = Stroke(width = 4f)
             )
             drawCircle(
                 color = Color(0.4f, 1f, 0.9f, 0.25f * ringPulse),
-                radius = r * 0.72f,
-                center = Offset(cx, cy),
+                radius = rr * 0.72f,
+                center = Offset(rcx, rcy),
                 style = Stroke(width = 2f)
             )
         }
