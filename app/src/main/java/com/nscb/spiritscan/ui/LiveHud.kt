@@ -263,6 +263,7 @@ fun LiveHud(vm: ScanViewModel) {
     val denseFlow by vm.denseFlow.collectAsState()
     val focusGate by vm.focusGate.collectAsState()
     val marsOod by vm.marsOod.collectAsState()
+    val lumGrid by vm.lumGrid.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -393,7 +394,8 @@ fun LiveHud(vm: ScanViewModel) {
                         output = output,
                         showPlumes = true,
                         audioSpike = audioAnom?.unknown == true || audioAnom?.speechLike == true,
-                        gridHeat = true
+                        gridHeat = true,
+                        lumGrid = lumGrid
                     )
                 }
             }
