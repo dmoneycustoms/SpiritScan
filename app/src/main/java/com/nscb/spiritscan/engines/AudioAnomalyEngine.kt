@@ -5,14 +5,15 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * Unknown audio anomaly via rolling ambient baseline (Part 1.1).
- * Uses SpiritBox RMS as a proxy level when mic capture isn't separate.
- * Spike > N sigma above rolling mean, and not explained as steady box output, → UNKNOWN.
+ * Unknown audio via rolling baseline + speech-band residual off hop.
  */
 data class AudioAnomalyState(
-    val level: Float,          // current rms proxy 0..1
+    val level: Float,
     val baseline: Float,
     val zScore: Float,
+    val speechResidual: Float,
+    val hopHz: Float,
+    val speechLike: Boolean,
     val unknown: Boolean,
     val note: String
 )
@@ -21,8 +22,9 @@ object AudioAnomalyEngine {
     private var n = 0
     private var mean = 0.0
     private var m2 = 0.0
-    private const val MIN_N = 40          // ~ samples after arm
+    private const val MIN_N = 40
     private const val SIGMA = 3.5f
+    private const val SPEECH_THRESH = 0.22f
 
     fun reset() {
         n = 0
@@ -33,39 +35,46 @@ object AudioAnomalyEngine {
     fun evaluate(
         rms: Float,
         boxOn: Boolean,
-        noiseDominant: String? = null
+        noiseDominant: String? = null,
+        speechResidual: Float = 0f,
+        hopHz: Float = 0f
     ): AudioAnomalyState {
         val x = rms.coerceIn(0f, 1f).toDouble()
-
-        // Always update baseline (rolling ambient / box bed)
         n++
         val d = x - mean
         mean += d / n
         m2 += d * (x - mean)
 
         val sd = if (n >= 2) sqrt(m2 / (n - 1).coerceAtLeast(1)) else 0.0
-        val floorSd = max(sd, 0.008) // avoid explode on silence
+        val floorSd = max(sd, 0.008)
         val z = if (n < MIN_N) 0f else ((x - mean) / floorSd).toFloat()
 
-        // Unknown = significant spike not explained by motion-heavy handling
         val motionish = noiseDominant == "MOTION"
+        val speechLike = speechResidual >= SPEECH_THRESH && !motionish
+
         val unknown = n >= MIN_N &&
-            abs(z) >= SIGMA &&
             !motionish &&
-            // if box is on, require stronger spike (box is noisy by design)
-            (!boxOn || abs(z) >= SIGMA + 1.2f)
+            (
+                (abs(z) >= SIGMA && (!boxOn || abs(z) >= SIGMA + 1.2f)) ||
+                    (speechLike && speechResidual >= SPEECH_THRESH + 0.08f)
+                )
 
         val note = when {
-            n < MIN_N -> "Profiling ambient audio baseline…"
+            n < MIN_N -> "Profiling mic ambient baseline…"
+            speechLike && unknown -> "Speech-like residual off hop ${"%.0f".format(hopHz)} Hz"
             unknown -> "Unknown audio spike z=${"%.1f".format(z)}"
-            boxOn -> "Box on — baseline adapting"
-            else -> "Audio baseline stable"
+            speechLike -> "Speech-band energy elevated"
+            boxOn -> "Box on @ ${"%.0f".format(hopHz)} Hz — hop notched"
+            else -> "Mic baseline stable"
         }
 
         return AudioAnomalyState(
             level = x.toFloat(),
             baseline = mean.toFloat().coerceIn(0f, 1f),
             zScore = z,
+            speechResidual = speechResidual.coerceIn(0f, 1f),
+            hopHz = hopHz,
+            speechLike = speechLike,
             unknown = unknown,
             note = note
         )
