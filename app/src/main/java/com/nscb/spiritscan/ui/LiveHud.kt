@@ -281,7 +281,7 @@ fun LiveHud(vm: ScanViewModel) {
         initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = LinearEasing),
+            animation = tween(1400, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "blink"
@@ -293,18 +293,24 @@ fun LiveHud(vm: ScanViewModel) {
             .background(Bg)
             .padding(top = 28.dp)
     ) {
-        if (alert) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Danger.copy(alpha = 0.25f + blink * 0.55f))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
+        // Fixed-height slot — never collapses, so the whole HUD does not jump
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(32.dp)
+                .background(
+                    if (alert) Danger.copy(alpha = 0.55f) else Color.Transparent
+                )
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (alert) {
                 Text(
                     alertMessage(output, residFilter),
                     color = Color.White,
                     fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
                 )
             }
         }
@@ -357,8 +363,8 @@ fun LiveHud(vm: ScanViewModel) {
                 .padding(horizontal = 8.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .border(
-                    width = if (alert) 2.dp else 1.dp,
-                    color = if (alert) Danger.copy(alpha = blink) else Border,
+                    width = 1.dp,
+                    color = if (alert) Danger else Border,
                     shape = RoundedCornerShape(4.dp)
                 )
         ) {
@@ -386,10 +392,6 @@ fun LiveHud(vm: ScanViewModel) {
                 }
             }
 
-            if (alert) {
-                Box(Modifier.fillMaxSize().background(Danger.copy(alpha = 0.08f * blink)))
-            }
-
             Text(
                 "${filter.label} · objs ${objects.size}",
                 color = Signal,
@@ -415,7 +417,7 @@ fun LiveHud(vm: ScanViewModel) {
                 Modifier
                     .fillMaxWidth()
                     .background(Card, RoundedCornerShape(8.dp))
-                    .border(1.dp, if (alert) Danger.copy(alpha = 0.5f) else Border, RoundedCornerShape(8.dp))
+                    .border(1.dp, if (alert) Danger else Border, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             ) {
                 Text("MODEL OUTPUTS", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
