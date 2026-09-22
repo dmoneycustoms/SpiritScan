@@ -554,10 +554,16 @@ fun LiveHud(vm: ScanViewModel) {
                 } else {
                     if (aa != null) {
                         Text(
-                            "AUDIO z ${"%.1f".format(aa.zScore)}  ${if (aa.unknown) "UNKNOWN SPIKE" else "baseline ok"}",
+                            "AUDIO z ${"%.1f".format(aa.zScore)}  hop ${"%.0f".format(aa.hopHz)}Hz  ${if (aa.unknown) "UNKNOWN SPIKE" else "baseline ok"}",
                             color = if (aa.unknown) Danger else Fg,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp
+                        )
+                        Text(
+                            "SPEECH res ${"%.2f".format(aa.speechResidual)}  ${if (aa.speechLike) "speech-like" else "no"}",
+                            color = if (aa.speechLike) Signal else Mute,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp
                         )
                         Text(aa.note, color = Mute, fontSize = 10.sp)
                     }
