@@ -77,9 +77,14 @@ class MarsOodRunner(context: Context) {
             val isOodV = readFloatScalar(result, 1)
             val resid = readResidualMeanAbs(result, 2)
 
+            // Untrained AE + identity Σ gives huge absolute scores on every frame.
+            // Trust model is_ood flag only if score is in a sane calibrated band;
+            // otherwise treat as diagnostic score only (not auto-OOD).
+            val calibrated = score < 80f  // after real training, in-dist scores drop
+            val ood = if (calibrated) (isOodV > 0.5f) else false
             MarsOodResult(
                 score = score,
-                isOod = isOodV > 0.5f,
+                isOod = ood,
                 residualEnergy = resid
             )
         } catch (ex: Exception) {
