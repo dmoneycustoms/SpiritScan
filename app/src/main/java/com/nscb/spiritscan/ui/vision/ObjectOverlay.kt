@@ -64,7 +64,8 @@ fun ObjectOverlay(
     output: EntityOutput,
     showPlumes: Boolean = true,
     audioSpike: Boolean = false,
-    gridHeat: Boolean = true
+    gridHeat: Boolean = true,
+    lumGrid: FloatArray? = null
 ) {
     val global = (
         output.qida * 0.2f +
@@ -146,12 +147,13 @@ fun ObjectOverlay(
         val hits = tracks[tid]?.hits ?: 1
         val persistence = (hits / 40f).coerceIn(0f, 1f)
 
-        // Region residual proxy: smaller, denser, revisited regions + global residual
-        // (true per-pixel residual needs frame buffer; this is track-aware proxy)
+        // True-ish region residual from luminance grid cells under this box
+        val boxResidual = boxLumResidual(lumGrid, b)
         val regionResidual = (
-            output.residualLevel * (0.5f + 0.5f * persistence) +
-                motion * 0.35f +
-                dwell * 0.25f
+            boxResidual * 0.55f +
+                output.residualLevel * 0.2f * (0.5f + 0.5f * persistence) +
+                motion * 0.15f +
+                dwell * 0.10f
             ).coerceIn(0f, 1f)
 
         // Footprint score — emphasizes dwell + revisit + local residual, not only box size
