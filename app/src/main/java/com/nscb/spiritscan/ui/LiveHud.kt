@@ -388,7 +388,13 @@ fun LiveHud(vm: ScanViewModel) {
                     if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
                 }
                 FilterMode.OBJ -> {
-                    ObjectOverlay(boxes = objects, output = output, showPlumes = true)
+                    ObjectOverlay(
+                        boxes = objects,
+                        output = output,
+                        showPlumes = true,
+                        audioSpike = audioAnom?.unknown == true || audioAnom?.speechLike == true,
+                        gridHeat = true
+                    )
                 }
             }
 
