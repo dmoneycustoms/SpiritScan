@@ -397,7 +397,7 @@ fun LiveHud(vm: ScanViewModel) {
                         residFilter?.unknown,
                         if (audioAnom?.unknown == true) 0.7f else null,
                         if (visionAnom?.unknown == true) 0.6f else null,
-                        if (denseFlow?.unknown == true) denseFlow?.independent
+                        if (denseFlow?.unknown == true) denseFlow?.independentFlow
                         else null
                     ).maxOrNull() ?: 0f
                     ObjectOverlay(
