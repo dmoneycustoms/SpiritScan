@@ -389,13 +389,26 @@ fun LiveHud(vm: ScanViewModel) {
                     if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
                 }
                 FilterMode.OBJ -> {
+                    val spike = (residFilter?.active == true) ||
+                        (audioAnom?.unknown == true) ||
+                        (visionAnom?.unknown == true) ||
+                        (denseFlow?.unknown == true)
+                    val strength = listOfNotNull(
+                        residFilter?.unknown,
+                        if (audioAnom?.unknown == true) 0.7f else null,
+                        if (visionAnom?.unknown == true) 0.6f else null,
+                        if (denseFlow?.unknown == true) denseFlow?.independent
+                        else null
+                    ).maxOrNull() ?: 0f
                     ObjectOverlay(
                         boxes = objects,
                         output = output,
                         showPlumes = true,
                         audioSpike = audioAnom?.unknown == true || audioAnom?.speechLike == true,
                         gridHeat = true,
-                        lumGrid = lumGrid
+                        lumGrid = lumGrid,
+                        spikeActive = spike,
+                        spikeStrength = strength
                     )
                 }
             }
