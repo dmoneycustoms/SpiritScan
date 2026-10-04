@@ -81,6 +81,7 @@ import com.nscb.spiritscan.ui.vision.OmegaOverlay
 import com.nscb.spiritscan.ui.vision.UvOverlay
 import com.nscb.spiritscan.vision.DetectedObjectBox
 import com.nscb.spiritscan.camera.DecodeCameraTuning
+import com.nscb.spiritscan.ui.decode.DecodeOverlay
 import com.nscb.spiritscan.camera.FocusCapture
 import com.nscb.spiritscan.vision.SpiritObjectDetector
 import java.util.concurrent.Executors
@@ -426,7 +427,7 @@ fun LiveHud(vm: ScanViewModel) {
                         freqBox?.anomaly == true,
                         denseFlow?.unknown == true
                     ).count { it }
-                    com.nscb.spiritscan.ui.decode.DecodeOverlay(decode, corr)
+                    DecodeOverlay(decode, corr)
                 }
                 FilterMode.HEAT -> HeatOverlay(output)
                 FilterMode.UV -> UvOverlay(output)
