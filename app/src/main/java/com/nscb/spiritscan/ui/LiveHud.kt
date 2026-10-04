@@ -1,0 +1,1018 @@
+package com.nscb.spiritscan.ui
+
+import android.view.ViewGroup
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.nscb.spiritscan.ScanViewModel
+import com.nscb.spiritscan.engines.ArkEngine
+import com.nscb.spiritscan.engines.HardeningState
+import com.nscb.spiritscan.engines.ExplainState
+import com.nscb.spiritscan.engines.FiveWState
+import com.nscb.spiritscan.engines.ResidualFilterState
+import com.nscb.spiritscan.engines.SpectralState
+import com.nscb.spiritscan.engines.QidaDecisionState
+import com.nscb.spiritscan.engines.TrustState
+import com.nscb.spiritscan.engines.NoiseSplitState
+import com.nscb.spiritscan.entity.EntityOutput
+import com.nscb.spiritscan.ui.diagnostics.NSCBDiagnostics
+import com.nscb.spiritscan.ui.entity.EntityModeUI
+import com.nscb.spiritscan.ui.entity.UltraEntityRing
+import com.nscb.spiritscan.ui.entity.ultraColorForMode
+import com.nscb.spiritscan.ui.hud.NSCBHud
+import com.nscb.spiritscan.ui.modes.InterferenceModeUI
+import com.nscb.spiritscan.ui.modes.JonesModeUI
+import com.nscb.spiritscan.ui.modes.MagneticModeUI
+import com.nscb.spiritscan.ui.modes.OmegaModeUI
+import com.nscb.spiritscan.ui.modes.QidaModeUI
+import com.nscb.spiritscan.ui.modes.ResidualModeUI
+import com.nscb.spiritscan.ui.modes.ScanMode
+import com.nscb.spiritscan.ui.modes.SdeModeUI
+import com.nscb.spiritscan.ui.modes.SurveyModeUI
+import com.nscb.spiritscan.ui.performance.NSCBPerformanceOverlay
+import com.nscb.spiritscan.ui.vision.HeatOverlay
+import com.nscb.spiritscan.ui.vision.JonesOverlay
+import com.nscb.spiritscan.ui.vision.MagOverlay
+import com.nscb.spiritscan.ui.vision.NightOverlay
+import com.nscb.spiritscan.ui.vision.ObjectOverlay
+import com.nscb.spiritscan.ui.vision.OmegaOverlay
+import com.nscb.spiritscan.ui.vision.UvOverlay
+import com.nscb.spiritscan.vision.DetectedObjectBox
+import com.nscb.spiritscan.camera.DecodeCameraTuning
+import com.nscb.spiritscan.camera.FocusCapture
+import com.nscb.spiritscan.vision.SpiritObjectDetector
+import java.util.concurrent.Executors
+import kotlin.math.abs
+
+private val Bg = Color(0xFF0B090B)
+private val Surface = Color(0xFF12151A)
+private val Card = Color(0xFF1A1E26)
+private val Fg = Color(0xFFE8EAED)
+private val Mute = Color(0xFF8B9196)
+private val Signal = Color(0xFF709A8E)
+private val Danger = Color(0xFFE85D4C)
+private val Border = Color(0xFF2A303A)
+private val ChipOff = Color(0xFF22262E)
+
+enum class FilterMode(val label: String) {
+    CAM("CAM"),
+    HEAT("HEAT"),
+    UV("UV"),
+    MAG("MAG"),
+    JONES("JONES"),
+    OMEGA("OMEGA"),
+    NIGHT("NIGHT"),
+    RING("RING"),
+    OBJ("OBJ"), // object detection boxes + residual plumes on objects
+    DECODE("DECODE") // v8.7 GPU visual anomaly decoder
+}
+
+private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mode) {
+    FilterMode.CAM, FilterMode.OBJ, FilterMode.DECODE -> 0f
+    FilterMode.HEAT -> (
+        o.qida * 0.35f + o.residualLevel * 0.3f +
+            (abs(o.zMag) / 12f).coerceIn(0f, 1f) * 0.25f
+        ).coerceIn(0f, 1f)
+    FilterMode.UV -> (
+        (if (!o.sdeOk) 0.5f else 0f) + o.residualLevel * 0.3f
+        ).coerceIn(0f, 1f)
+    // MAG chip only glows when |B| is high (80+ scale)
+    FilterMode.MAG -> ((o.magUt - 55f) / 40f).coerceIn(0f, 1f)
+    FilterMode.JONES -> o.jonesScore.coerceIn(0f, 1f)
+    FilterMode.OMEGA -> (1f - o.omegaTrust.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+    FilterMode.NIGHT -> {
+        val lux = o.survey.lux ?: 80f
+        ((1f - (lux / 180f).coerceIn(0f, 1f)) * 0.5f + o.residualLevel * 0.5f).coerceIn(0f, 1f)
+    }
+    FilterMode.RING -> (o.qida * 0.5f + o.residualLevel * 0.5f).coerceIn(0f, 1f)
+}
+
+/**
+ * Alerts are strict so normal house fields (~45–60 µT) do NOT fire.
+ * MAG path only alerts when |B| >= 80.
+ */
+private fun isAnomalyAlert(o: EntityOutput, unknown: ResidualFilterState?): Boolean {
+    // Unexplained residual OR truly abnormal |B| — not high z alone after walking from CAL spot
+    if (unknown?.active == true) return true
+    val highMag = o.magUt >= 80f
+    val lowMag = o.magUt < 22f
+    val extremeZOutOfBand = abs(o.zMag) >= 12f && (o.magUt < 28f || o.magUt > 75f)
+    return highMag || lowMag || extremeZOutOfBand
+}
+
+private fun alertMessage(o: EntityOutput, unknown: ResidualFilterState?): String {
+    return when {
+        unknown?.active == true ->
+            "ALERT · UNKNOWN RESIDUAL ${"%.0f".format((unknown.unknown) * 100)}%"
+        o.magUt >= 80f ->
+            "ALERT · HIGH FIELD ${"%.0f".format(o.magUt)} µT"
+        o.magUt < 22f ->
+            "ALERT · LOW FIELD ${"%.1f".format(o.magUt)} µT"
+        abs(o.zMag) >= 12f && (o.magUt < 28f || o.magUt > 75f) ->
+            "ALERT · EXTREME Z ${"%.1f".format(o.zMag)} @ ${"%.0f".format(o.magUt)}µT"
+        else ->
+            "ALERT · ANOMALY"
+    }
+}
+
+@Composable
+fun SpiritTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            background = Bg, surface = Surface, onBackground = Fg, primary = Signal
+        ),
+        content = content
+    )
+}
+
+@Composable
+private fun CameraWithDetection(
+    modifier: Modifier = Modifier,
+    onObjects: (List<DetectedObjectBox>) -> Unit,
+    onFrameResidual: (Float) -> Unit = {},
+    onLumGrid: (FloatArray?) -> Unit = {},
+    onFrame: (androidx.camera.core.ImageProxy) -> Unit = {},
+    decodeLock: Boolean = false,
+    onExposureLocked: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    // Throttle UI updates to ~4 Hz — stops screen shake from every-frame ML results
+    val detector = remember {
+        var lastMs = 0L
+        SpiritObjectDetector(frameHook = { ip -> onFrame(ip) }) { boxes, frameResidual, lumGrid ->
+            val now = System.currentTimeMillis()
+            if (now - lastMs >= 250L) {
+                lastMs = now
+                onObjects(boxes)
+                onFrameResidual(frameResidual)
+                onLumGrid(lumGrid)
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            detector.close()
+            analysisExecutor.shutdown()
+        }
+    }
+
+    val previewView = remember {
+        PreviewView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
+
+    var cam by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
+
+    // DECODE turns the camera into a measuring instrument: no OIS/EIS, minimal denoise,
+    // exposure + white balance locked after they converge. Released when you leave DECODE.
+    LaunchedEffect(cam, decodeLock) {
+        val c = cam ?: return@LaunchedEffect
+        try {
+            if (decodeLock) {
+                DecodeCameraTuning.applyStable(c)
+                kotlinx.coroutines.delay(1500)
+                DecodeCameraTuning.lockExposure(c)
+                kotlinx.coroutines.delay(400)
+                onExposureLocked() // learn the scene under the locked exposure
+            } else {
+                DecodeCameraTuning.release(c)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        try {
+            val cameraProvider = ProcessCameraProvider.getInstance(context).get()
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
+            val analysisBuilder = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(android.util.Size(640, 480))
+            try {
+                FocusCapture.attachToAnalysis(analysisBuilder)
+            } catch (_: Exception) {
+            }
+            val analysis = analysisBuilder
+                .build()
+                .also { it.setAnalyzer(analysisExecutor, detector) }
+
+            cameraProvider.unbindAll()
+            cam = cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    AndroidView(modifier = modifier, factory = { previewView }, update = { })
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun LiveHud(vm: ScanViewModel) {
+    val output by vm.output.collectAsState()
+    val boxOn by vm.boxOn.collectAsState()
+    val walking by vm.walking.collectAsState()
+    val sweep by vm.sweep.collectAsState()
+    val currentMode by vm.currentMode.collectAsState()
+    val fusion by vm.fusion.collectAsState()
+    val hud by vm.hud.collectAsState()
+    val diag by vm.diag.collectAsState()
+    val perf by vm.perf.collectAsState()
+    val ark by vm.ark.collectAsState()
+    val noise by vm.noise.collectAsState()
+    val hard by vm.hard.collectAsState()
+    val trust by vm.trust.collectAsState()
+    val qidaDec by vm.qidaDec.collectAsState()
+    val explain by vm.explain.collectAsState()
+    val fiveW by vm.fiveW.collectAsState()
+    val residFilter by vm.residFilter.collectAsState()
+    val spectral by vm.spectral.collectAsState()
+    val audioAnom by vm.audioAnom.collectAsState()
+    val visionAnom by vm.visionAnom.collectAsState()
+    val optFlow by vm.optFlow.collectAsState()
+    val denseFlow by vm.denseFlow.collectAsState()
+    val focusGate by vm.focusGate.collectAsState()
+    val marsOod by vm.marsOod.collectAsState()
+    val camAnom by vm.camAnom.collectAsState()
+    val freqBox by vm.freqBox.collectAsState()
+    val sessionActive by vm.sessionActive.collectAsState()
+    val sessionRows by vm.sessionRows.collectAsState()
+    val lumGrid by vm.lumGrid.collectAsState()
+    val decode by vm.decode.collectAsState()
+    val ctx = LocalContext.current
+
+    var filter by remember { mutableStateOf(FilterMode.HEAT) }
+    var objects by remember { mutableStateOf<List<DetectedObjectBox>>(emptyList()) }
+    androidx.compose.runtime.LaunchedEffect(filter) {
+        vm.setDecodeEnabled(filter == FilterMode.DECODE)
+    }
+    // push OOD path into ViewModel
+    androidx.compose.runtime.LaunchedEffect(objects) {
+        vm.onDetectedObjects(objects)
+    }
+
+    val alert = isAnomalyAlert(output, residFilter) ||
+        (audioAnom?.unknown == true) ||
+        (visionAnom?.unknown == true && residFilter?.active == true) ||
+        (denseFlow?.unknown == true && residFilter?.active == true) || (marsOod?.isOod == true && residFilter?.active == true) ||
+        (decode?.status == com.nscb.spiritscan.decode.DecodeStatus.UNEXPLAINED && residFilter?.active == true)
+    val pulse = rememberInfiniteTransition(label = "pulse")
+    val blink by pulse.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "blink"
+    )
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+            .padding(top = 28.dp)
+    ) {
+        // Fixed-height slot — never collapses, so the whole HUD does not jump
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(32.dp)
+                .background(
+                    if (alert) Danger.copy(alpha = 0.55f) else Color.Transparent
+                )
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (alert) {
+                Text(
+                    alertMessage(output, residFilter),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+            }
+        }
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Surface)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+        ) {
+            Text("SpiritScan", color = Fg, fontSize = 15.sp)
+            Spacer(Modifier.height(4.dp))
+            Text("FILTER", color = Mute, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                FilterMode.entries.forEach { m ->
+                    val strength = if (m == FilterMode.DECODE) (decode?.anomalyIndex ?: 0f)
+                    else filterStrength(m, output)
+                    val selected = filter == m
+                    val glow = if (strength > 0.25f) 0.4f + strength * 0.6f * blink
+                    else if (selected) 0.85f else 0.35f
+                    val bg = when {
+                        selected && strength > 0.35f -> Danger.copy(alpha = glow)
+                        selected -> Signal.copy(alpha = 0.85f)
+                        strength > 0.35f -> Danger.copy(alpha = glow * 0.7f)
+                        strength > 0.15f -> Signal.copy(alpha = 0.35f + strength * 0.4f)
+                        else -> ChipOff
+                    }
+                    Button(
+                        onClick = { filter = m },
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = bg,
+                            contentColor = if (strength > 0.3f || selected) Color.White else Mute
+                        ),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(m.label, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        }
+
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(
+                    width = 1.dp,
+                    color = if (alert) Danger else Border,
+                    shape = RoundedCornerShape(4.dp)
+                )
+        ) {
+            CameraWithDetection(
+                modifier = Modifier.fillMaxSize(),
+                onObjects = { objects = it },
+                onFrameResidual = { r -> vm.onVisionFrame(r) },
+                onLumGrid = { g -> vm.onLumGrid(g) },
+                onFrame = { ip -> vm.decodeFrame(ip) },
+                decodeLock = filter == FilterMode.DECODE,
+                onExposureLocked = { vm.resetDecoder() }
+            )
+
+            when (filter) {
+                FilterMode.CAM -> {}
+                FilterMode.DECODE -> {
+                    val corr = listOf(
+                        residFilter?.active == true,
+                        audioAnom?.unknown == true,
+                        freqBox?.anomaly == true,
+                        denseFlow?.unknown == true
+                    ).count { it }
+                    com.nscb.spiritscan.ui.decode.DecodeOverlay(decode, corr)
+                }
+                FilterMode.HEAT -> HeatOverlay(output)
+                FilterMode.UV -> UvOverlay(output)
+                FilterMode.MAG -> MagOverlay(output)
+                FilterMode.JONES -> JonesOverlay(output)
+                FilterMode.OMEGA -> OmegaOverlay(output)
+                FilterMode.NIGHT -> NightOverlay(output)
+                FilterMode.RING -> {
+                    val f = fusion
+                    if (f != null) UltraEntityRing(output, f, ultraColorForMode(currentMode.name))
+                }
+                FilterMode.OBJ -> {
+                    // Multi-channel gate: audio-only does not form cluster
+                    val spike = (residFilter?.active == true) ||
+                        (camAnom?.unknown == true) ||
+                        (visionAnom?.unknown == true) ||
+                        (denseFlow?.unknown == true) ||
+                        (audioAnom?.unknown == true && (audioAnom?.speechLike == true || residFilter?.active == true)) ||
+                        (freqBox?.anomaly == true && residFilter?.active == true)
+                    val strength = listOfNotNull(
+                        residFilter?.unknown,
+                        camAnom?.anomalyScore,
+                        if (visionAnom?.unknown == true) 0.6f else null,
+                        if (denseFlow?.unknown == true) denseFlow?.independentFlow else null,
+                        if (audioAnom?.speechLike == true) 0.55f else null,
+                        if (freqBox?.anomaly == true) (1f - (freqBox?.pllLock ?: 1f)) else null
+                    ).maxOrNull() ?: 0f
+                    ObjectOverlay(
+                        boxes = objects,
+                        output = output,
+                        showPlumes = true,
+                        audioSpike = audioAnom?.unknown == true || audioAnom?.speechLike == true,
+                        gridHeat = true,
+                        lumGrid = lumGrid,
+                        spikeActive = spike,
+                        spikeStrength = strength
+                    )
+                }
+            }
+
+            Text(
+                "${filter.label} · objs ${objects.size}",
+                color = Signal,
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(0.6f), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            )
+        }
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, if (alert) Danger else Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text(
+                "SESSION ${if (sessionActive) "ON · $sessionRows rows · tap to MARK" else "OFF · starts on ARM"}",
+                color = if (sessionActive) Signal else Mute,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.combinedClickable(
+                    onClick = { if (sessionActive) vm.bookmark("MARK") },
+                    onLongClick = {
+                        if (sessionActive) vm.stopSession() else vm.startSession(ctx)
+                    }
+                )
+            )
+            Text("MODEL OUTPUTS", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                // Prefer hardened stable label — raw Jones often sticks on device_interference indoors
+                val jLabel = hard?.stableLabel ?: output.jonesLabel
+                val jScore = hard?.stableScore ?: output.jonesScore
+                Text(
+                    "Jones ${jLabel} ${(jScore * 100).toInt()}%${if (hard?.mitigated == true) " · gated" else ""}",
+                    color = if (jLabel.contains("device") || jLabel.contains("entity")) Danger else Fg,
+                    fontFamily = FontFamily.Monospace, fontSize = 12.sp
+                )
+                Text(
+                    "QIDA ${"%.2f".format(output.qida)}  Om ${"%.2f".format(output.omegaTrust)}  SDE ${"%.2f".format(output.sdeComposite)}",
+                    color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                )
+                Text(
+                    "|B| ${"%.2f".format(output.magUt)}  z ${"%.2f".format(output.zMag)}  res ${"%.2f".format(output.residualLevel)}",
+                    color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                )
+                Text(
+                    if (output.calibrated) "baseline locked  ·  MAG alert ≥ 80 µT"
+                    else "IDLE — press ARM then CAL",
+                    color = if (output.calibrated) Signal else Danger,
+                    fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                )
+            }
+
+            // UNKNOWN RESIDUAL ONLY (known noise stripped)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("UNKNOWN RESIDUAL", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val rf = residFilter
+                if (rf == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "unknown ${"%.0f".format(rf.unknown * 100)}%  known ${"%.0f".format(rf.knownNoise * 100)}%  stripped ${rf.stripped}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        if (rf.active) "ACTIVE — unexplained" else "filtered / quiet",
+                        color = if (rf.active) Danger else Signal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(rf.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // SPECTRUM (live mag |B|)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("SPECTRUM", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val sp = spectral
+                if (sp == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    // Bar row
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        sp.bins.forEachIndexed { i, v ->
+                            val hFrac = v.coerceIn(0.05f, 1f)
+                            val isMains = i == 3 || i == 4
+                            val isUnk = i == 7
+                            val col = when {
+                                isUnk && (residFilter?.active == true) -> Danger
+                                isMains -> Color(0xFFFF9800)
+                                else -> Signal
+                            }
+                            Column(
+                                Modifier.weight(1f),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .fillMaxHeight(hFrac)
+                                        .background(col.copy(alpha = 0.85f), RoundedCornerShape(3.dp))
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        sp.binLabels.forEach { lab ->
+                            Text(
+                                lab,
+                                Modifier.weight(1f),
+                                color = Mute,
+                                fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Text(
+                        "peak ${sp.peakBand} ${"%.1f".format(sp.peakHz)}Hz  Fs ${"%.0f".format(sp.sampleRateHz)}  mains ${"%.0f".format(sp.mainsEnergy * 100)}%  unk ${"%.0f".format(sp.residualSpectrum * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 10.sp
+                    )
+                    Text(sp.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // UNKNOWN A/V (audio baseline + vision OOD)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("UNKNOWN A/V", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val aa = audioAnom
+                val va = visionAnom
+                if (aa == null && va == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    if (aa != null) {
+                        Text(
+                            "AUDIO z ${"%.1f".format(aa.zScore)}  hop ${"%.0f".format(aa.hopHz)}Hz  ${if (aa.unknown) "UNKNOWN SPIKE" else "baseline ok"}",
+                            color = if (aa.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            "SPEECH res ${"%.2f".format(aa.speechResidual)}  ${if (aa.speechLike) "speech-like" else "no"}",
+                            color = if (aa.speechLike) Signal else Mute,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp
+                        )
+                        Text(aa.note, color = Mute, fontSize = 10.sp)
+                    }
+                    val ca = camAnom
+                    if (ca != null) {
+                        Text(
+                            "CAM score ${"%.2f".format(ca.anomalyScore)}  mad ${"%.3f".format(ca.frameMad)}  ${if (ca.unknown) "ANOMALY" else "stable"}",
+                            color = if (ca.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(ca.note, color = Mute, fontSize = 10.sp)
+                    }
+                    val fb = freqBox
+                    if (fb != null) {
+                        Text(
+                            "FREQ72 pll ${"%.2f".format(fb.pllLock)}  jit ${"%.2f".format(fb.jitter)}  ${if (fb.anomaly) "GRID UNSTABLE" else "ok"}",
+                            color = if (fb.anomaly) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(fb.note, color = Mute, fontSize = 10.sp)
+                    }
+                    if (va != null) {
+                        Text(
+                            "VISION ood ${va.unknownCount}  ${if (va.unknown) "UNKNOWN" else "clear"}",
+                            color = if (va.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        if (va.labels.isNotEmpty()) {
+                            Text(va.labels.joinToString(", "), color = Mute, fontSize = 10.sp)
+                        }
+                        Text(va.note, color = Mute, fontSize = 10.sp)
+                    }
+                    val of = optFlow
+                    if (of != null) {
+                        Text(
+                            "FLOW phone ${"%.0f".format(of.phoneMotion * 100)}%  vis ${"%.0f".format(of.visualMotion * 100)}%  indep ${"%.0f".format(of.independentMotion * 100)}%",
+                            color = if (of.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            if (of.unknown) "INDEPENDENT MOTION" else of.note,
+                            color = if (of.unknown) Danger else Mute,
+                            fontSize = 10.sp
+                        )
+                    }
+                    val df = denseFlow
+                    if (df != null) {
+                        Text(
+                            "DENSE flow ${"%.0f".format(df.flowEnergy * 100)}%  indep ${"%.0f".format(df.independentFlow * 100)}%",
+                            color = if (df.unknown) Danger else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(df.note, color = if (df.unknown) Danger else Mute, fontSize = 10.sp)
+                    }
+                    val fg = focusGate
+                    if (fg != null) {
+                        Text(
+                            "FOCUS ${if (fg.focusAvailable) "%.1f D".format(fg.focusDiopters) else "n/a"}  ${if (fg.dustLikely) "DUST LIKELY" else "ok"}",
+                            color = if (fg.dustLikely) Mute else Fg,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                        Text(fg.note, color = Mute, fontSize = 10.sp)
+                    }
+                    val mo = marsOod
+                    if (mo != null) {
+                        Text(
+                            "MARS score ${"%.1f".format(mo.score)}  ${if (mo.isOod) "OOD" else "raw (untrained)"}  res ${"%.2f".format(mo.residualEnergy)}",
+                            color = if (mo.isOod) Danger else Mute,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                    } else {
+                        Text("MARS — waiting / no model", color = Mute, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            // ARK Module 19
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("ARK · MODULE 19", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val a = ark
+                if (a == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "phase ${"%.3f".format(a.arkPhase)}  weight ${"%.3f".format(a.arkWeight)}  fusion ${"%.3f".format(a.fusionNorm)}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "SDE drift ${"%.2f".format(a.sdeDrift)}  noise ${"%.2f".format(a.sdeNoise)}  res ${"%.2f".format(a.sdeResidual)}",
+                        color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "Jones ${a.jonesName.uppercase()}  ·  drift ${a.driftName.uppercase()}  ·  ${a.alignName.uppercase()}",
+                        color = Signal, fontFamily = FontFamily.Monospace, fontSize = 12.sp
+                    )
+                }
+            }
+
+            // NOISE SPLIT
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("NOISE SPLIT", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val n = noise
+                if (n == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "WIRE ${"%.0f".format(n.wire * 100)}%  MOTION ${"%.0f".format(n.motion * 100)}%  PHONE ${"%.0f".format(n.phone * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "RESIDUAL ${"%.0f".format(n.residual * 100)}%  ·  dominant ${n.dominant}",
+                        color = if (n.dominant == "RESIDUAL") Danger else Signal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(n.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // HARDENING (v81/v82 policy)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("HARDENING", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val h = hard
+                if (h == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "stable ${h.stableLabel} ${"%.0f".format(h.stableScore * 100)}%  gate ${"%.0f".format(h.hardeningScore * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        if (h.threatConfirmed) "THREAT CONFIRMED" else if (h.mitigated) "MITIGATED" else "STABLE",
+                        color = if (h.threatConfirmed) Danger else Signal,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(h.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // TRUST PROPAGATION (v3.5 lite)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("TRUST", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val tr = trust
+                if (tr == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "trust ${"%.0f".format(tr.trust * 100)}%  gate ${if (tr.gateOpen) "OPEN" else "BLOCKED"}  viol ${tr.violationCount}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    val flags = buildList {
+                        if (tr.physicsViol) add("PHYS")
+                        if (tr.behaviorViol) add("BEHAV")
+                        if (tr.residualViol) add("RES")
+                    }.joinToString(" ")
+                    Text(
+                        if (flags.isEmpty()) "no violations" else "violations: $flags",
+                        color = if (flags.isEmpty()) Signal else Danger,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(tr.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // QIDA DECISION (Trust-Math / 3CAI lite)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("QIDA DECISION", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val qd = qidaDec
+                if (qd == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "state ${qd.primaryState}  conf ${"%.0f".format(qd.confidence * 100)}%  score ${"%.0f".format(qd.decisionScore * 100)}%",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        if (qd.collapseOk) "COLLAPSE OK" else "HOLD",
+                        color = if (qd.collapseOk) Signal else Danger,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(qd.note, color = Mute, fontSize = 11.sp)
+                }
+            }
+
+            // EXPLAIN (DOD XAI lite)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("EXPLAIN", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val ex = explain
+                if (ex == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text(
+                        "primary ${ex.primary} ${"%.0f".format(ex.primaryConf * 100)}%  band ${ex.confidenceBand}",
+                        color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(
+                        "alt ${ex.alternative} ${"%.0f".format(ex.altConf * 100)}%  phys ${ex.physicsViolations}",
+                        color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                    Text(ex.why, color = Fg, fontSize = 11.sp)
+                    Text(ex.note, color = Mute, fontSize = 10.sp)
+                }
+            }
+
+            // 5W VALIDATOR
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("5W PACKET", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val fw = fiveW
+                if (fw == null) {
+                    Text("waiting for ARM…", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                } else {
+                    Text("WHO  ${fw.who}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHAT ${fw.what}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHEN ${fw.`when`}", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHERE ${fw.where}", color = Mute, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text("WHY  ${fw.why.take(100)}", color = Fg, fontSize = 11.sp)
+                    Text(
+                        "compliance ${"%.0f".format(fw.complianceScore * 100)}%  rules ${fw.rulesOk}/${fw.rulesTotal}  ${if (fw.compliant) "OK" else "FAIL"}",
+                        color = if (fw.compliant) Signal else Danger,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                    Text(fw.note, color = Mute, fontSize = 10.sp)
+                }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Card, RoundedCornerShape(8.dp))
+                    .border(1.dp, Border, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Text("SITE  ${output.survey.activity.uppercase()}", color = Fg, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Text(output.survey.note, color = Mute, fontSize = 11.sp)
+                if (objects.isNotEmpty()) {
+                    Text(
+                        "OBJECTS  ${objects.joinToString { it.label }}",
+                        color = Signal, fontFamily = FontFamily.Monospace, fontSize = 11.sp
+                    )
+                }
+            }
+
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                Text("SWEEP ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                com.nscb.spiritscan.sensor.SweepMode.entries.forEach { m ->
+                    TextButton(onClick = { vm.setSweep(m) }) {
+                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (sweep == m) Signal else Mute)
+                    }
+                }
+            }
+
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                Text("MODE ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                ScanMode.entries.forEach { m ->
+                    TextButton(onClick = { vm.setMode(m) }) {
+                        Text(m.name, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = if (currentMode == m) Signal else Mute)
+                    }
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth().background(Card, RoundedCornerShape(8.dp)).border(1.dp, Border, RoundedCornerShape(8.dp)).padding(10.dp)
+            ) {
+                when (currentMode) {
+                    ScanMode.JONES -> JonesModeUI(output)
+                    ScanMode.MAGNETIC -> MagneticModeUI(output)
+                    ScanMode.QIDA -> QidaModeUI(output)
+                    ScanMode.OMEGA -> OmegaModeUI(output)
+                    ScanMode.SDE -> SdeModeUI(output)
+                    ScanMode.RESIDUAL -> ResidualModeUI(output)
+                    ScanMode.INTERFERENCE -> InterferenceModeUI(output)
+                    ScanMode.SURVEY -> SurveyModeUI(output)
+                    ScanMode.ENTITY -> EntityModeUI(output)
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth().background(Card, RoundedCornerShape(8.dp)).border(1.dp, Border, RoundedCornerShape(8.dp)).padding(10.dp)
+            ) {
+                NSCBHud(hud)
+                NSCBDiagnostics(diag)
+                NSCBPerformanceOverlay(perf)
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        Row(
+            Modifier.fillMaxWidth().background(Surface).padding(horizontal = 8.dp, vertical = 8.dp).navigationBarsPadding(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Button(onClick = { vm.startSession(ctx); vm.arm(ctx) }, modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Signal)) { Text("ARM", fontSize = 14.sp) }
+            Button(
+                onClick = { vm.calibrate() },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .combinedClickable(
+                        onClick = { vm.calibrate() },
+                        onLongClick = { vm.bookmark("MARK") }
+                    )
+            ) { Text("CAL", fontSize = 12.sp) }
+            Button(onClick = { vm.toggleBox() }, modifier = Modifier.weight(1f).height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (boxOn) Signal else ChipOff)) {
+                Text(if (boxOn) "BOX*" else "BOX", fontSize = 14.sp)
+            }
+            Button(onClick = { vm.toggleWalk() }, modifier = Modifier.weight(1f).height(48.dp)) {
+                Text(if (walking) "STOP" else "WALK", fontSize = 14.sp)
+            }
+        }
+    }
+}
