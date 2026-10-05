@@ -429,7 +429,7 @@ fun LiveHud(vm: ScanViewModel) {
                         residFilter?.active == true,
                         audioAnom?.unknown == true
                     ).count { it }
-                    DecodeOverlay(decode, corr)
+                    DecodeOverlay(decode, corr, onCycle = { vm.cycleDecodeLevel() })
                 }
                 FilterMode.HEAT -> HeatOverlay(output)
                 FilterMode.UV -> UvOverlay(output)

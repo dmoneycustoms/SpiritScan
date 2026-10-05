@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -127,7 +128,7 @@ private val ExplainedC = Color(0xFFFFB020)
 private val Cyan = Color(0xFF3DE8FF)
 
 @Composable
-fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
+fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int, onCycle: () -> Unit = {}) {
     var tick by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -253,6 +254,7 @@ fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
     Column(
         Modifier
             .align(Alignment.BottomStart)
+            .clickable { onCycle() }
             .padding(4.dp)
             .background(Color.Black.copy(0.62f))
             .padding(horizontal = 5.dp, vertical = 2.dp)
@@ -269,7 +271,7 @@ fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
                 color = Color(0xFFD7DEE8), fontSize = 8.sp, fontFamily = FontFamily.Monospace
             )
             Text(
-                "floor ${"%.4f".format(f.noiseFloor)} · ego ${f.egoX},${f.egoY} · glob ${(f.globalActivity * 100).toInt()}% · cm ${"%.2f".format(f.commonMode)}",
+                "sens ${listOf("STRICT", "NORMAL", "LOOSE")[f.level.coerceIn(0, 2)]} (tap) · floor ${"%.3f".format(f.noiseFloor)} · ego ${f.egoX},${f.egoY} · glob ${(f.globalActivity * 100).toInt()}%",
                 color = Color(0xFF8AA0B8), fontSize = 8.sp, fontFamily = FontFamily.Monospace
             )
         }

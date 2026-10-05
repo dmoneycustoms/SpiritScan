@@ -185,6 +185,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun resetDecoder() = decoder.reset()
 
+    /** STRICT -> NORMAL -> LOOSE -> STRICT. Looser = tolerates more hand movement, more false candidates. */
+    fun cycleDecodeLevel() {
+        decoder.level = (decoder.level + 1) % 3
+    }
+
     /** Runs on the camera analysis thread for every frame while DECODE is selected. */
     fun decodeFrame(ip: androidx.camera.core.ImageProxy) {
         if (!decodeOn) return
@@ -195,9 +200,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         val acc = if (s == null) 0f else kotlin.math.abs(
             kotlin.math.sqrt(s.accX * s.accX + s.accY * s.accY + s.accZ * s.accZ) - 9.81f
         )
-        // Much stricter than the general-purpose motion score: a 0.2 rad/s sway is already
-        // enough to smear edges and fake "anomalies". Gate trips at ~0.18 rad/s or ~0.4 m/s^2.
-        val phone = maxOf((gyro / 0.5f).coerceIn(0f, 1f), (acc / 1.2f).coerceIn(0f, 1f))
+        // 0..1 = fraction of 1.0 rad/s (gyro) or 2.0 m/s^2 (accel deviation from 1 g).
+        // The decoder compares this to its sensitivity-dependent gate (0.30 / 0.50 / 0.80).
+        val phone = maxOf((gyro / 1.0f).coerceIn(0f, 1f), (acc / 2.0f).coerceIn(0f, 1f))
         _decode.value = decoder.process(
             plane.buffer, plane.rowStride, plane.pixelStride,
             ip.width, ip.height, ip.imageInfo.rotationDegrees,

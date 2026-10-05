@@ -87,7 +87,8 @@ class DecodeFrame(
     val egoX: Int,
     val egoY: Int,
     val anomalyIndex: Float,
-    val unexplainedCount: Int
+    val unexplainedCount: Int,
+    val level: Int
 )
 
 class AnomalyDecoder {
@@ -105,7 +106,6 @@ class AnomalyDecoder {
         private const val ALPHA_SUSPECT = 0.0015f
         private const val CELL = 4
         private const val MAX_BLOBS = 8
-        private const val MOTION_GATE = 0.35f
         private const val GLOBAL_GATE = 0.22f
         private const val CONFIRM_SEC = 0.8f
         /** Absolute sigma floor (0..1 luma). ~2.5 gray levels: below this, pixel flicker is not evidence. */
@@ -113,13 +113,38 @@ class AnomalyDecoder {
         /** Mean luma below this = too dark to measure anything (sensor noise dominates). */
         private const val DARK_MEAN = 0.07f
         /** Mean |frame - previous frame| above this during learning = the view moved, restart learning. */
-        private const val CAL_STILL = 0.030f
-        /** Smoothed ego-shift (px) above this = hand tremor / drift, measurement is unreliable. */
-        private const val EGO_GATE = 0.75f
+        private const val CAL_STILL = 0.050f
+        /** Gated frames in a row before the model is declared stale and relearned (~0.8 s). */
+        private const val GATE_RELEARN = 24
     }
 
     /** True on API < 33: emit false-colour pixels instead of packed data. */
     var colormapFallback = false
+
+    /** 0 = STRICT, 1 = NORMAL, 2 = LOOSE. Cycled from the HUD (tap the DECODE status strip). */
+    @Volatile
+    var level = 1
+
+    private fun motionGate(): Float = when (level) {
+        0 -> 0.30f
+        2 -> 0.80f
+        else -> 0.50f
+    }
+
+    private fun egoGate(): Float = when (level) {
+        0 -> 0.6f
+        2 -> 2.2f
+        else -> 1.3f
+    }
+
+    private var gateFrames = 0
+    private var satStreak = 0
+
+    /** A gated frame. Only a SUSTAINED gate (not a brief wobble) throws the learned model away. */
+    private fun noteGate() {
+        gateFrames++
+        if (gateFrames > GATE_RELEARN) movedSince = true
+    }
 
     @Volatile
     private var resetRequested = true
@@ -230,6 +255,8 @@ class AnomalyDecoder {
         egoRecent = 0f
         cmAbs = 0f
         movedSince = false
+        gateFrames = 0
+        satStreak = 0
     }
 
     // =================================================================================
@@ -284,12 +311,13 @@ class AnomalyDecoder {
         for (i in 0 until n) cur[i] = cur[i] * gain
 
         // ---- motion gate (applies to learning too) ---------------------------------
-        if (phoneMotion > MOTION_GATE) {
-            movedSince = true
+        if (phoneMotion > motionGate()) {
+            noteGate()
             java.util.Arrays.fill(runLen, 0)
             System.arraycopy(cur, 0, prevXa, 0, n)
             return build(
-                DecodeStatus.GATED, "Phone moving — rest it on something solid",
+                DecodeStatus.GATED,
+                "Phone moving (${"%.2f".format(phoneMotion)} > ${"%.2f".format(motionGate())}) — tap strip for looser",
                 emptyList(), 0f, 0, 0, 0f, false
             )
         }
@@ -299,6 +327,7 @@ class AnomalyDecoder {
 
         // ---- calibration -----------------------------------------------------------
         if (calCount < CAL_FRAMES) {
+            gateFrames = 0
             var restarted = false
             if (calCount > 0) {
                 var sad = 0f
@@ -369,14 +398,19 @@ class AnomalyDecoder {
             bestDy = 0
         }
         egoRecent = egoRecent * 0.9f + hypot(bestDx.toFloat(), bestDy.toFloat()) * 0.1f
-        if (abs(bestDx) == EGO_R || abs(bestDy) == EGO_R || egoRecent > EGO_GATE) {
+        val sat = abs(bestDx) == EGO_R || abs(bestDy) == EGO_R
+        satStreak = if (sat) satStreak + 1 else 0
+        if (satStreak >= 3 || egoRecent > egoGate()) {
+            noteGate()
             java.util.Arrays.fill(runLen, 0)
             System.arraycopy(cur, 0, prevXa, 0, n)
             return build(
-                DecodeStatus.GATED, "Camera shifting (${bestDx},${bestDy} px) — rest the phone",
+                DecodeStatus.GATED,
+                "Camera drifting (${bestDx},${bestDy} px, avg ${"%.2f".format(egoRecent)}) — tap strip for looser",
                 emptyList(), 0f, bestDx, bestDy, 0f, false
             )
         }
+        gateFrames = 0
         for (y in 0 until h) {
             val sy = (y + bestDy).coerceIn(0, h - 1)
             for (x in 0 until w) {
@@ -842,7 +876,8 @@ class AnomalyDecoder {
             egoX = egoX,
             egoY = egoY,
             anomalyIndex = anomalyIndex,
-            unexplainedCount = unexplained
+            unexplainedCount = unexplained,
+            level = level
         )
     }
 }

@@ -67,3 +67,14 @@ was there. Causes and fixes:
 
 Prototype re-run with the new floor/persistence: pure noise 0 false blobs, dark+noise 0 false blobs, moving orb 70 % of
 frames in window, static 10σ orb 52 %. Sensitivity is slightly lower on purpose. Still not compiled on a phone by me.
+
+## v8.7.2 — gates were too strict
+v8.7.1 gated on tiny hand movement and never recovered. Changes:
+- Motion gate now trips at 0.50 rad/s (NORMAL) instead of ~0.18; accel at ~1 m/s^2.
+- Tap the DECODE status strip to cycle sensitivity STRICT (0.30) / NORMAL (0.50) / LOOSE (0.80 rad/s). Looser = tolerates more
+  hand movement but produces more false candidates. Shown as `sens ...` on the strip.
+- Small camera shifts (up to +-2 px) are compensated by the ego search instead of gated. Only sustained saturation (3 frames)
+  or a high smoothed drift gates.
+- A brief wobble no longer throws the learned scene away: the model is relearned only after ~0.8 s of continuous gating.
+- Learning tolerance doubled (restart threshold 0.05 mean-abs frame difference).
+- Gate notes now print the measured value vs the threshold so you can see what tripped it.
