@@ -368,8 +368,10 @@ fun LiveHud(vm: ScanViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 FilterMode.entries.forEach { m ->
-                    val strength = if (m == FilterMode.DECODE) (decode?.anomalyIndex ?: 0f)
-                    else filterStrength(m, output)
+                    val strength = if (m == FilterMode.DECODE) {
+                        val idx = decode?.anomalyIndex ?: 0f
+                        if (residFilter?.active == true || audioAnom?.unknown == true) idx else idx * 0.3f
+                    } else filterStrength(m, output)
                     val selected = filter == m
                     val glow = if (strength > 0.25f) 0.4f + strength * 0.6f * blink
                     else if (selected) 0.85f else 0.35f
@@ -421,11 +423,11 @@ fun LiveHud(vm: ScanViewModel) {
             when (filter) {
                 FilterMode.CAM -> {}
                 FilterMode.DECODE -> {
+                    // Independent channels only: magnetometer residual and microphone.
+                    // Camera-derived flow and the box's own audio jitter are NOT independent.
                     val corr = listOf(
                         residFilter?.active == true,
-                        audioAnom?.unknown == true,
-                        freqBox?.anomaly == true,
-                        denseFlow?.unknown == true
+                        audioAnom?.unknown == true
                     ).count { it }
                     DecodeOverlay(decode, corr)
                 }

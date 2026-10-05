@@ -202,9 +202,9 @@ fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
 
             // reticles
             textPaint.textSize = 9.sp.toPx()
-            for (b in f.blobs) {
-                val col = if (b.cause == Cause.UNEXPLAINED) Unexplained else ExplainedC
-                val alpha = if (b.confirmed) 1f else 0.45f
+            for (b in f.blobs.filter { it.confirmed }.take(4)) {
+                val col = if (b.cause == Cause.UNEXPLAINED && corroboration > 0) Unexplained else ExplainedC
+                val alpha = 1f
                 val cx = offX + b.cx * mw * s
                 val cy = offY + b.cy * mh * s
                 val hw = max(b.halfW * mw * s, 10f) + 4f
@@ -227,7 +227,8 @@ fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
                         center = Offset(cx, cy), style = Stroke(1.2f)
                     )
                 }
-                val label = "#${b.id} ${b.cause.label} ${"%.1f".format(b.sigma)}σ ${"%.1f".format(b.ageSec)}s"
+                val label = if (b.cause == Cause.UNEXPLAINED) "#${b.id} ${"%.1f".format(b.sigma)}σ"
+                else b.cause.label
                 textPaint.color = android.graphics.Color.argb(
                     (alpha * 255).toInt(),
                     (col.red * 255).toInt(), (col.green * 255).toInt(), (col.blue * 255).toInt()
@@ -240,9 +241,11 @@ fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
 
     // status strip
     val f = frame
+    val visualOnly = f?.status == DecodeStatus.UNEXPLAINED && corroboration == 0
     val statusColor = when (f?.status) {
-        DecodeStatus.UNEXPLAINED -> Unexplained
+        DecodeStatus.UNEXPLAINED -> if (visualOnly) ExplainedC else Unexplained
         DecodeStatus.EXPLAINED -> ExplainedC
+        DecodeStatus.DARK -> Color(0xFF8AA0B8)
         DecodeStatus.CLEAR -> Color(0xFF39E58C)
         DecodeStatus.GATED -> Color(0xFF8AA0B8)
         else -> Cyan
@@ -256,7 +259,8 @@ fun BoxScope.DecodeOverlay(frame: DecodeFrame?, corroboration: Int) {
     ) {
         Text(
             if (f == null) "DECODE · waiting for camera…"
-            else "DECODE · ${f.status.name} · AI ${(f.anomalyIndex * 100).toInt()}% · x-chan $corroboration/4",
+            else if (visualOnly) "DECODE · VISUAL ONLY · score ${(f.anomalyIndex * 100).toInt()}% · x-chan 0/2"
+            else "DECODE · ${f.status.name} · score ${(f.anomalyIndex * 100).toInt()}% · x-chan $corroboration/2",
             color = statusColor, fontSize = 9.sp, fontFamily = FontFamily.Monospace
         )
         if (f != null) {

@@ -41,7 +41,7 @@ enum class Cause(val label: String, val explained: Boolean) {
     MOVER("LARGE MOVER", true)
 }
 
-enum class DecodeStatus { CALIBRATING, GATED, CLEAR, EXPLAINED, UNEXPLAINED }
+enum class DecodeStatus { CALIBRATING, DARK, GATED, CLEAR, EXPLAINED, UNEXPLAINED }
 
 class DecodedBlob(
     val id: Int,
@@ -99,7 +99,7 @@ class AnomalyDecoder {
         private const val EGO_R = 3
         private const val T_HIT = 3.5f
         private const val T_SUSPECT = 2.5f
-        private const val RUN_MIN = 4
+        private const val RUN_MIN = 6
         private const val MIN_AREA = 4
         private const val ALPHA_BG = 0.02f
         private const val ALPHA_SUSPECT = 0.0015f
@@ -107,7 +107,15 @@ class AnomalyDecoder {
         private const val MAX_BLOBS = 8
         private const val MOTION_GATE = 0.35f
         private const val GLOBAL_GATE = 0.22f
-        private const val CONFIRM_SEC = 0.5f
+        private const val CONFIRM_SEC = 0.8f
+        /** Absolute sigma floor (0..1 luma). ~2.5 gray levels: below this, pixel flicker is not evidence. */
+        private const val ABS_SIGMA = 0.010f
+        /** Mean luma below this = too dark to measure anything (sensor noise dominates). */
+        private const val DARK_MEAN = 0.07f
+        /** Mean |frame - previous frame| above this during learning = the view moved, restart learning. */
+        private const val CAL_STILL = 0.030f
+        /** Smoothed ego-shift (px) above this = hand tremor / drift, measurement is unreliable. */
+        private const val EGO_GATE = 0.75f
     }
 
     /** True on API < 33: emit false-colour pixels instead of packed data. */
@@ -254,6 +262,16 @@ class AnomalyDecoder {
 
         downsample(buf, rowStride, pixelStride, srcW, srcH, rot)
 
+        // ---- dark gate -------------------------------------------------------------
+        if (lastMean < DARK_MEAN) {
+            movedSince = true // relearn the scene once there is light again
+            System.arraycopy(cur, 0, prevXa, 0, n)
+            return build(
+                DecodeStatus.DARK, "Too dark to measure — add light, uncover the lens",
+                emptyList(), 0f, 0, 0, 0f, false
+            )
+        }
+
         // ---- exposure normalisation ------------------------------------------------
         val mean = max(lastMean, 1e-3f)
         if (!haveRef) {
@@ -262,11 +280,40 @@ class AnomalyDecoder {
         } else {
             refMean += (mean - refMean) * 0.02f
         }
-        val gain = refMean / mean
+        val gain = (refMean / mean).coerceIn(0.6f, 1.6f)
         for (i in 0 until n) cur[i] = cur[i] * gain
+
+        // ---- motion gate (applies to learning too) ---------------------------------
+        if (phoneMotion > MOTION_GATE) {
+            movedSince = true
+            java.util.Arrays.fill(runLen, 0)
+            System.arraycopy(cur, 0, prevXa, 0, n)
+            return build(
+                DecodeStatus.GATED, "Phone moving — rest it on something solid",
+                emptyList(), 0f, 0, 0, 0f, false
+            )
+        }
+        if (movedSince) {
+            resetModel() // starts a fresh calibration below
+        }
 
         // ---- calibration -----------------------------------------------------------
         if (calCount < CAL_FRAMES) {
+            var restarted = false
+            if (calCount > 0) {
+                var sad = 0f
+                var cnt = 0
+                var k = 0
+                while (k < n) {
+                    sad += abs(cur[k] - prevXa[k])
+                    cnt++
+                    k += 3
+                }
+                if (cnt > 0 && sad / cnt > CAL_STILL) {
+                    calCount = 0
+                    restarted = true
+                }
+            }
             calCount++
             val c = calCount.toFloat()
             for (i in 0 until n) {
@@ -283,24 +330,8 @@ class AnomalyDecoder {
             System.arraycopy(cur, 0, prevXa, 0, n)
             return build(
                 DecodeStatus.CALIBRATING,
-                "Learning scene ${(100 * calCount / CAL_FRAMES)}% — hold the phone still",
-                emptyList(), 0f, 0, 0, 0f, false
-            )
-        }
-
-        // ---- motion gate -----------------------------------------------------------
-        if (phoneMotion > MOTION_GATE) {
-            movedSince = true
-            System.arraycopy(cur, 0, prevXa, 0, n)
-            return build(
-                DecodeStatus.GATED, "Phone moving — brace it or set it down",
-                emptyList(), 0f, 0, 0, 0f, false
-            )
-        }
-        if (movedSince) {
-            resetModel()
-            return build(
-                DecodeStatus.CALIBRATING, "Phone settled — relearning scene",
+                if (restarted) "View moved while learning — restarting, hold still"
+                else "Learning scene ${(100 * calCount / CAL_FRAMES)}% — hold the phone still",
                 emptyList(), 0f, 0, 0, 0f, false
             )
         }
@@ -338,6 +369,14 @@ class AnomalyDecoder {
             bestDy = 0
         }
         egoRecent = egoRecent * 0.9f + hypot(bestDx.toFloat(), bestDy.toFloat()) * 0.1f
+        if (abs(bestDx) == EGO_R || abs(bestDy) == EGO_R || egoRecent > EGO_GATE) {
+            java.util.Arrays.fill(runLen, 0)
+            System.arraycopy(cur, 0, prevXa, 0, n)
+            return build(
+                DecodeStatus.GATED, "Camera shifting (${bestDx},${bestDy} px) — rest the phone",
+                emptyList(), 0f, bestDx, bestDy, 0f, false
+            )
+        }
         for (y in 0 until h) {
             val sy = (y + bestDy).coerceIn(0, h - 1)
             for (x in 0 until w) {
@@ -350,7 +389,7 @@ class AnomalyDecoder {
         var varSum = 0f
         for (i in 0 until n) varSum += vr[i]
         val meanVar = varSum / n
-        val floor2 = 0.3f * meanVar + 1e-7f // (0.55 * sigma_mean)^2
+        val floor2 = max(0.3f * meanVar, ABS_SIGMA * ABS_SIGMA) + 1e-7f
         for (y in 0 until h) {
             val ym = if (y > 0) y - 1 else y
             val yp = if (y < h - 1) y + 1 else y
@@ -557,12 +596,12 @@ class AnomalyDecoder {
         for (t in tracks) t.matched = false
         val blobs = ArrayList<DecodedBlob>(comps.size)
         var unexplained = 0
-        var keep = 1f
+        var topConf = 0f
         for (cp in comps) {
             val ccx = cp.sx.toFloat() / cp.area
             val ccy = cp.sy.toFloat() / cp.area
             var tr: Track? = null
-            var bd = 10f
+            var bd = max(14f, sqrt(cp.area.toFloat()) * 1.2f)
             for (t in tracks) {
                 if (t.matched) continue
                 val d = hypot(t.cx - ccx, t.cy - ccy)
@@ -616,13 +655,19 @@ class AnomalyDecoder {
                 }
             }
 
+            val bw = cp.maxX - cp.minX + 1
+            val bh = cp.maxY - cp.minY + 1
+            val aspect = max(bw, bh).toFloat() / max(1, min(bw, bh)).toFloat()
+            val fill = cp.area.toFloat() / (bw * bh).toFloat()
+            val streak = aspect > 3.5f && fill < 0.65f
+
             val cause: Cause = when {
                 brightness > 0.90f -> Cause.GLARE
                 areaFrac < 0.010f && flowMag > 0.8f && polarity > 0 -> Cause.PARTICLE
                 areaFrac > 0.12f -> Cause.SHADOW
                 areaFrac > 0.03f && flowMag > 0.3f -> Cause.MOVER
                 depth > 0.9f && changes >= 5 -> Cause.FLICKER
-                egoRecent > 0.6f && gradMean > 0.08f -> Cause.EDGE
+                streak || gradMean > 0.12f || (egoRecent > 0.3f && gradMean > 0.05f) -> Cause.EDGE
                 else -> Cause.UNEXPLAINED
             }
 
@@ -637,7 +682,7 @@ class AnomalyDecoder {
             val confirmed = ageSec >= CONFIRM_SEC
             if (cause == Cause.UNEXPLAINED && confirmed) {
                 unexplained++
-                keep *= (1f - 0.9f * conf)
+                topConf = max(topConf, conf)
             }
 
             blobs.add(
@@ -664,7 +709,7 @@ class AnomalyDecoder {
             val t = iter.next()
             if (!t.matched) {
                 t.missed++
-                if (t.missed > 10) iter.remove()
+                if (t.missed > 20) iter.remove()
             }
         }
 
@@ -678,7 +723,7 @@ class AnomalyDecoder {
         }
         System.arraycopy(xa, 0, prevXa, 0, n)
 
-        val anomalyIndex = 1f - keep
+        val anomalyIndex = topConf
         val status = when {
             unexplained > 0 -> DecodeStatus.UNEXPLAINED
             blobs.isNotEmpty() -> DecodeStatus.EXPLAINED

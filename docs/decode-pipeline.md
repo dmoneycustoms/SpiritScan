@@ -1,4 +1,4 @@
-# DECODE — visual anomaly decoder (v8.7)
+# DECODE — visual anomaly decoder (v8.7.1)
 
 Select the **DECODE** chip on the HUD. Set the phone down (or brace it) and let it learn the scene (~3 s).
 
@@ -47,3 +47,23 @@ These numbers are from a prototype of the same maths, not from the Kotlin build 
 - Handheld use is mostly gated; this wants a tripod or a flat surface.
 - Slow changes (more than ~10 s) are absorbed into the model by design.
 - Not compiled or run on-device when this was written. First CI build may need small fixes.
+
+## v8.7.1 changes (from field screenshots of v8.7)
+v8.7 reported 5–6 "unexplained" regions at 99 % in dark and handheld scenes while every other channel said nothing
+was there. Causes and fixes:
+- **No absolute noise floor**: in near-black frames sigma was 0.005, so pixel flicker scored 14σ. Now floored at 0.010 and
+  frames with mean luma < 0.07 report `DARK` instead of being scored.
+- **Learning accepted a moving camera**: the motion gate sat after calibration. It now gates learning too, and learning
+  restarts if consecutive frames differ by more than 3 % (mean abs).
+- **Handheld edge streaks**: the ego-shift search saturated at +-3 px. Hitting the limit, or a smoothed ego above 0.75 px,
+  now gates the frame. Thin streaks (aspect > 3.5) and blobs sitting on strong scene edges are classified `EDGE SHIMMER`.
+- **Stricter motion metric** for DECODE: trips at ~0.18 rad/s or ~0.4 m/s^2 instead of ~0.9 rad/s.
+- **Score**: now the strongest confirmed region's confidence. It no longer climbs to 99 % just because there are many blobs.
+- **Cross-channel**: red `UNEXPLAINED` requires the magnetometer residual or the microphone to agree (x-chan n/2).
+  Without that the HUD says `VISUAL ONLY` in amber. Camera flow and the box's own audio-timing jitter are not independent
+  evidence and no longer count.
+- **Tracker**: adaptive match radius and 20-frame memory so IDs stop churning. Only confirmed (0.8 s) regions are drawn,
+  max 4, short labels.
+
+Prototype re-run with the new floor/persistence: pure noise 0 false blobs, dark+noise 0 false blobs, moving orb 70 % of
+frames in window, static 10σ orb 52 %. Sensitivity is slightly lower on purpose. Still not compiled on a phone by me.

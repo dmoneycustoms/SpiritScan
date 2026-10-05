@@ -66,3 +66,5 @@ See `docs/v8.3-upgrade-integration.md` for the full module map.
 New **DECODE** HUD chip: GPU-shaded visual anomaly decoder with cause elimination, flow vectors, tracked
 reticles and camera locking. See `docs/decode-pipeline.md`. Still not a ghost detector: it reports
 "unexplained residual", not entities.
+
+v8.7.1: DECODE false-positive fixes (dark gate, absolute noise floor, motion-gated learning, cross-channel requirement). See `docs/decode-pipeline.md`.
