@@ -185,6 +185,31 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun resetDecoder() = decoder.reset()
 
+    fun setAirEnabled(on: Boolean) {
+        decoder.airEnabled = on
+    }
+
+    // ---- v8.8 Spirit Box full-band scan ----------------------------------------------
+    private val scanner = com.nscb.spiritscan.sensor.SpiritScanner(appContext)
+    val scan: StateFlow<com.nscb.spiritscan.dsp.ScanSnapshot?> = scanner.state
+    val scanError: StateFlow<String> = scanner.error
+    private val _scanOn = MutableStateFlow(false)
+    val scanOn: StateFlow<Boolean> = _scanOn
+
+    fun toggleScan() {
+        if (_scanOn.value) {
+            scanner.stop()
+            _scanOn.value = false
+        } else {
+            scanner.start()
+            _scanOn.value = scanner.running
+        }
+    }
+
+    fun scanNullTest() = scanner.engine.startNull()
+
+    fun scanNullClear() = scanner.engine.clearNull()
+
     /** STRICT -> NORMAL -> LOOSE -> STRICT. Looser = tolerates more hand movement, more false candidates. */
     fun cycleDecodeLevel() {
         decoder.level = (decoder.level + 1) % 3
@@ -395,6 +420,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     // Tell mic which hop to notch
                     try {
                         mic?.hopFreqHz = box.freq
+                        scanner.setOwnHz(if (_boxOn.value) box.freq.toDouble() else 0.0)
                     } catch (_: Exception) {
                     }
                     val speechRes = mic?.speechResidual ?: 0f
@@ -521,6 +547,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             box.start()
             _boxOn.value = true
         }
+        scanner.engine.fastAdapt()
     }
 
     fun setSweep(m: SweepMode) {
@@ -538,6 +565,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         sensors?.stop()
+        scanner.stop()
         box.stop()
         try {
             mic?.stop()

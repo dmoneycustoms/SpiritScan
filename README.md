@@ -68,3 +68,5 @@ reticles and camera locking. See `docs/decode-pipeline.md`. Still not a ghost de
 "unexplained residual", not entities.
 
 v8.7.1: DECODE false-positive fixes (dark gate, absolute noise floor, motion-gated learning, cross-channel requirement). See `docs/decode-pipeline.md`.
+
+v8.8.0: **AIR** HUD mode (micro-variation, air-flow, pulse sources) and Spirit Box **full-band scan** card (48 kHz waterfall, voice signature, NULL TEST). See `docs/air-and-scan.md`.

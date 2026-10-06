@@ -81,7 +81,9 @@ import com.nscb.spiritscan.ui.vision.OmegaOverlay
 import com.nscb.spiritscan.ui.vision.UvOverlay
 import com.nscb.spiritscan.vision.DetectedObjectBox
 import com.nscb.spiritscan.camera.DecodeCameraTuning
+import com.nscb.spiritscan.ui.decode.AirOverlay
 import com.nscb.spiritscan.ui.decode.DecodeOverlay
+import com.nscb.spiritscan.ui.scan.ScanCard
 import com.nscb.spiritscan.camera.FocusCapture
 import com.nscb.spiritscan.vision.SpiritObjectDetector
 import java.util.concurrent.Executors
@@ -107,11 +109,12 @@ enum class FilterMode(val label: String) {
     NIGHT("NIGHT"),
     RING("RING"),
     OBJ("OBJ"), // object detection boxes + residual plumes on objects
-    DECODE("DECODE") // v8.7 GPU visual anomaly decoder
+    DECODE("DECODE"), // v8.7 GPU visual anomaly decoder
+    AIR("AIR") // v8.8 micro-variation + air-flow (BOS) + pulse sources
 }
 
 private fun filterStrength(mode: FilterMode, o: EntityOutput): Float = when (mode) {
-    FilterMode.CAM, FilterMode.OBJ, FilterMode.DECODE -> 0f
+    FilterMode.CAM, FilterMode.OBJ, FilterMode.DECODE, FilterMode.AIR -> 0f
     FilterMode.HEAT -> (
         o.qida * 0.35f + o.residualLevel * 0.3f +
             (abs(o.zMag) / 12f).coerceIn(0f, 1f) * 0.25f
@@ -298,12 +301,16 @@ fun LiveHud(vm: ScanViewModel) {
     val sessionRows by vm.sessionRows.collectAsState()
     val lumGrid by vm.lumGrid.collectAsState()
     val decode by vm.decode.collectAsState()
+    val scanSnap by vm.scan.collectAsState()
+    val scanOn by vm.scanOn.collectAsState()
+    val scanErr by vm.scanError.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
     var objects by remember { mutableStateOf<List<DetectedObjectBox>>(emptyList()) }
     androidx.compose.runtime.LaunchedEffect(filter) {
-        vm.setDecodeEnabled(filter == FilterMode.DECODE)
+        vm.setDecodeEnabled(filter == FilterMode.DECODE || filter == FilterMode.AIR)
+        vm.setAirEnabled(filter == FilterMode.AIR)
     }
     // push OOD path into ViewModel
     androidx.compose.runtime.LaunchedEffect(objects) {
@@ -371,6 +378,8 @@ fun LiveHud(vm: ScanViewModel) {
                     val strength = if (m == FilterMode.DECODE) {
                         val idx = decode?.anomalyIndex ?: 0f
                         if (residFilter?.active == true || audioAnom?.unknown == true) idx else idx * 0.3f
+                    } else if (m == FilterMode.AIR) {
+                        decode?.air?.airIndex ?: 0f
                     } else filterStrength(m, output)
                     val selected = filter == m
                     val glow = if (strength > 0.25f) 0.4f + strength * 0.6f * blink
@@ -416,7 +425,7 @@ fun LiveHud(vm: ScanViewModel) {
                 onFrameResidual = { r -> vm.onVisionFrame(r) },
                 onLumGrid = { g -> vm.onLumGrid(g) },
                 onFrame = { ip -> vm.decodeFrame(ip) },
-                decodeLock = filter == FilterMode.DECODE,
+                decodeLock = filter == FilterMode.DECODE || filter == FilterMode.AIR,
                 onExposureLocked = { vm.resetDecoder() }
             )
 
@@ -431,6 +440,7 @@ fun LiveHud(vm: ScanViewModel) {
                     ).count { it }
                     DecodeOverlay(decode, corr, onCycle = { vm.cycleDecodeLevel() })
                 }
+                FilterMode.AIR -> AirOverlay(decode?.air, decode)
                 FilterMode.HEAT -> HeatOverlay(output)
                 FilterMode.UV -> UvOverlay(output)
                 FilterMode.MAG -> MagOverlay(output)
@@ -948,6 +958,15 @@ fun LiveHud(vm: ScanViewModel) {
                     )
                 }
             }
+
+            ScanCard(
+                snap = scanSnap,
+                on = scanOn,
+                error = scanErr,
+                onToggle = { vm.toggleScan() },
+                onNull = { vm.scanNullTest() },
+                onClearNull = { vm.scanNullClear() }
+            )
 
             Row(Modifier.horizontalScroll(rememberScrollState())) {
                 Text("SWEEP ", color = Mute, fontSize = 10.sp, fontFamily = FontFamily.Monospace)

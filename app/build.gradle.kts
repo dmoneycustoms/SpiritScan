@@ -11,8 +11,8 @@ android {
         applicationId = "com.nscb.spiritscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 89
-        versionName = "8.7.2-decode"
+        versionCode = 90
+        versionName = "8.8.0-air-scan"
     }
     buildTypes {
         release {

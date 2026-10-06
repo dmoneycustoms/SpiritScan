@@ -1,5 +1,7 @@
 package com.nscb.spiritscan.decode
 
+import com.nscb.spiritscan.air.AirEngine
+import com.nscb.spiritscan.air.AirFrame
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -89,7 +91,10 @@ class DecodeFrame(
     val anomalyIndex: Float,
     val unexplainedCount: Int,
     val level: Int
-)
+) {
+    /** Filled by AnomalyDecoder.process() when AIR mode is on and the frame was usable. */
+    var air: AirFrame? = null
+}
 
 class AnomalyDecoder {
 
@@ -138,6 +143,14 @@ class AnomalyDecoder {
     }
 
     private var gateFrames = 0
+
+    /** AIR engine (micro-variation, air-flow, pulses). Only runs while [airEnabled]. */
+    val air = AirEngine()
+
+    @Volatile
+    var airEnabled = false
+    private var airResult: AirFrame? = null
+    private var airDone = false
     private var satStreak = 0
 
     /** A gated frame. Only a SUSTAINED gate (not a brief wobble) throws the learned model away. */
@@ -249,6 +262,7 @@ class AnomalyDecoder {
     }
 
     private fun resetModel() {
+        air.reset()
         calCount = 0
         java.util.Arrays.fill(runLen, 0)
         tracks.clear()
@@ -261,6 +275,25 @@ class AnomalyDecoder {
 
     // =================================================================================
     fun process(
+        buf: ByteBuffer,
+        rowStride: Int,
+        pixelStride: Int,
+        srcW: Int,
+        srcH: Int,
+        rotation: Int,
+        tNs: Long,
+        phoneMotion: Float
+    ): DecodeFrame {
+        airDone = false
+        airResult = null
+        val f = processInner(buf, rowStride, pixelStride, srcW, srcH, rotation, tNs, phoneMotion)
+        if (airEnabled) {
+            if (airDone) f.air = airResult else air.hold()
+        }
+        return f
+    }
+
+    private fun processInner(
         buf: ByteBuffer,
         rowStride: Int,
         pixelStride: Int,
@@ -745,6 +778,12 @@ class AnomalyDecoder {
                 t.missed++
                 if (t.missed > 20) iter.remove()
             }
+        }
+
+        // ---- AIR engine: aligned frame vs. background, before the background adapts --------
+        if (airEnabled) {
+            airResult = air.process(xa, mu, max(sqrt(meanVar), ABS_SIGMA), w, h, dtEma.toDouble())
+            airDone = true
         }
 
         // ---- anomaly-gated learning ------------------------------------------------
