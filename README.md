@@ -70,3 +70,5 @@ reticles and camera locking. See `docs/decode-pipeline.md`. Still not a ghost de
 v8.7.1: DECODE false-positive fixes (dark gate, absolute noise floor, motion-gated learning, cross-channel requirement). See `docs/decode-pipeline.md`.
 
 v8.8.0: **AIR** HUD mode (micro-variation, air-flow, pulse sources) and Spirit Box **full-band scan** card (48 kHz waterfall, voice signature, NULL TEST). See `docs/air-and-scan.md`.
+
+v8.9.0: live context (space weather, weather, quakes), passive ONNX novelty with a trained autoencoder, sham-controlled trial runner. See `docs/passive-onnx.md`.

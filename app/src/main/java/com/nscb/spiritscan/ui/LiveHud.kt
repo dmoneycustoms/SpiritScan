@@ -83,6 +83,10 @@ import com.nscb.spiritscan.vision.DetectedObjectBox
 import com.nscb.spiritscan.camera.DecodeCameraTuning
 import com.nscb.spiritscan.ui.decode.AirOverlay
 import com.nscb.spiritscan.ui.decode.DecodeOverlay
+import com.nscb.spiritscan.ui.research.ContextCard
+import com.nscb.spiritscan.ui.research.NoveltyStrip
+import com.nscb.spiritscan.ui.research.PassiveCard
+import com.nscb.spiritscan.ui.research.TrialCard
 import com.nscb.spiritscan.ui.scan.ScanCard
 import com.nscb.spiritscan.camera.FocusCapture
 import com.nscb.spiritscan.vision.SpiritObjectDetector
@@ -304,6 +308,11 @@ fun LiveHud(vm: ScanViewModel) {
     val scanSnap by vm.scan.collectAsState()
     val scanOn by vm.scanOn.collectAsState()
     val scanErr by vm.scanError.collectAsState()
+    val ctxSnap by vm.ctx.collectAsState()
+    val nov by vm.novelty.collectAsState()
+    val passiveOn by vm.passiveOn.collectAsState()
+    val trialSt by vm.trialState.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(Unit) { vm.startContext() }
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -479,6 +488,8 @@ fun LiveHud(vm: ScanViewModel) {
                     )
                 }
             }
+
+            NoveltyStrip(nov)
 
             Text(
                 "${filter.label} · objs ${objects.size}",
@@ -966,6 +977,29 @@ fun LiveHud(vm: ScanViewModel) {
                 onToggle = { vm.toggleScan() },
                 onNull = { vm.scanNullTest() },
                 onClearNull = { vm.scanNullClear() }
+            )
+
+            TrialCard(
+                st = trialSt,
+                onStart = { b, s -> vm.trialStart(b, s) },
+                onStop = { vm.trialStop() },
+                onMark = { vm.trialMark() }
+            )
+
+            PassiveCard(
+                nov = nov,
+                on = passiveOn,
+                onToggle = { vm.togglePassive() },
+                onRelearn = { vm.passiveRelearn() },
+                onClear = { vm.passiveClear() }
+            )
+
+            ContextCard(
+                snap = ctxSnap,
+                explain = vm.contextExplain(),
+                locationText = vm.contextLocationText(),
+                onRefresh = { vm.refreshContext() },
+                onSetLocation = { la, lo -> vm.setContextLocation(la, lo) }
             )
 
             Row(Modifier.horizontalScroll(rememberScrollState())) {

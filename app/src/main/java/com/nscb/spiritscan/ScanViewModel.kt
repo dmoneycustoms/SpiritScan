@@ -210,6 +210,93 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun scanNullClear() = scanner.engine.clearNull()
 
+    // ---- v8.9 live context, passive novelty, sham-controlled trial -----------------------
+    private val ctxFeeds = com.nscb.spiritscan.feeds.ContextFeeds(appContext)
+    val ctx: StateFlow<com.nscb.spiritscan.feeds.ContextSnapshot> = ctxFeeds.state
+
+    fun startContext() = ctxFeeds.start()
+
+    fun refreshContext() = ctxFeeds.refreshNow()
+
+    fun setContextLocation(lat: Double, lon: Double) = ctxFeeds.setLocation(lat, lon)
+
+    fun contextLocationText(): String {
+        val l = ctxFeeds.location() ?: return "not set (global feeds only)"
+        return "${"%.3f".format(l.first)}, ${"%.3f".format(l.second)}"
+    }
+
+    fun contextExplain(): String = ctxFeeds.explain()
+
+    private fun passiveVector(): FloatArray {
+        val o = _output.value
+        val rf = _residFilter.value
+        val au = _audioAnom.value
+        val cam = _camAnom.value
+        val sp = _spectral.value
+        val sc = scanner.state.value
+        val dec = _decode.value
+        val v = FloatArray(12)
+        v[0] = o.magUt
+        v[1] = o.zMag
+        v[2] = rf?.unknown ?: 0f
+        v[3] = au?.zScore ?: 0f
+        v[4] = au?.speechResidual ?: 0f
+        v[5] = cam?.anomalyScore ?: 0f
+        v[6] = cam?.frameMad ?: 0f
+        v[7] = sp?.residualSpectrum ?: 0f
+        v[8] = sc?.voice?.score ?: 0f
+        v[9] = sc?.excess?.maxOrNull() ?: 0f
+        v[10] = dec?.anomalyIndex ?: 0f
+        v[11] = dec?.air?.airIndex ?: 0f
+        for (i in v.indices) if (v[i].isNaN() || v[i].isInfinite()) v[i] = 0f
+        return v
+    }
+
+    private val passive = com.nscb.spiritscan.novelty.PassiveRecorder(
+        appContext, { passiveVector() }, { ctxFeeds.explain() }
+    )
+    val novelty: StateFlow<com.nscb.spiritscan.dsp.NoveltySnapshot?> = passive.state
+    private val _passiveOn = MutableStateFlow(false)
+    val passiveOn: StateFlow<Boolean> = _passiveOn
+
+    fun togglePassive() {
+        if (_passiveOn.value) {
+            passive.stop()
+            _passiveOn.value = false
+        } else {
+            passive.start(300)
+            _passiveOn.value = true
+        }
+    }
+
+    fun passiveRelearn() = passive.relearn(300)
+
+    fun passiveClear() = passive.clearEvents()
+
+    private val trial = com.nscb.spiritscan.trial.TrialEngine(
+        viewModelScope,
+        appContext,
+        { on -> if (_boxOn.value != on) toggleBox() },
+        {
+            longArrayOf(
+                scanner.engine.voice.result().eventsTotal,
+                scanner.engine.wide.confirmedCount()
+            )
+        },
+        { ctxFeeds.explain() }
+    )
+    val trialState: StateFlow<com.nscb.spiritscan.trial.TrialState> = trial.state
+
+    fun trialStart(blocks: Int, blockSec: Int) {
+        if (!_scanOn.value) toggleScan()
+        if (!_scanOn.value) return
+        trial.start(blocks, blockSec)
+    }
+
+    fun trialStop() = trial.stop()
+
+    fun trialMark() = trial.mark()
+
     /** STRICT -> NORMAL -> LOOSE -> STRICT. Looser = tolerates more hand movement, more false candidates. */
     fun cycleDecodeLevel() {
         decoder.level = (decoder.level + 1) % 3
@@ -565,6 +652,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         sensors?.stop()
+        trial.stop()
+        passive.stop()
+        ctxFeeds.stop()
         scanner.stop()
         box.stop()
         try {
