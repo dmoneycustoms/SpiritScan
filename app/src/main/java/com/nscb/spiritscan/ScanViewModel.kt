@@ -198,6 +198,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleScan() {
         if (_scanOn.value) {
+            if (_sonarOn.value) toggleSonar()
             scanner.stop()
             _scanOn.value = false
         } else {
@@ -297,6 +298,194 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun trialMark() = trial.mark()
 
+    // ---- v9.0 senses: sonar, sound camera, magnetic map, coincidence, sonification, pareidolia ----
+    private val sonar = com.nscb.spiritscan.senses.SonarEngine()
+    private val sonarIo = com.nscb.spiritscan.sensor.SonarIO(sonar)
+    private val _sonar = MutableStateFlow<com.nscb.spiritscan.senses.SonarEngine.Snapshot?>(null)
+    val sonarState: StateFlow<com.nscb.spiritscan.senses.SonarEngine.Snapshot?> = _sonar
+    private val _sonarOn = MutableStateFlow(false)
+    val sonarOn: StateFlow<Boolean> = _sonarOn
+
+    fun toggleSonar() {
+        if (_sonarOn.value) {
+            sonarIo.stop()
+            scanner.wideListener = null
+            scanner.engine.wide.setMask(0.0, 0.0)
+            _sonarOn.value = false
+            _sonar.value = null
+            return
+        }
+        if (!_scanOn.value) toggleScan()
+        if (!_scanOn.value) return
+        scanner.wideListener = { b, n -> sonar.push(b, n) }
+        scanner.engine.wide.setMask(17000.0, 21500.0)
+        if (sonarIo.start()) {
+            _sonarOn.value = true
+        } else {
+            scanner.wideListener = null
+            scanner.engine.wide.setMask(0.0, 0.0)
+        }
+    }
+
+    val doaState: StateFlow<com.nscb.spiritscan.senses.DoaEngine.Snapshot?> = scanner.doaState
+
+    fun doaCalibrate() = scanner.doa.startCalibration()
+
+    fun doaClearCalibration() = scanner.doa.clearCalibration()
+
+    private val magMap = com.nscb.spiritscan.senses.MagMapEngine()
+    private val _map = MutableStateFlow<com.nscb.spiritscan.senses.MagMapEngine.Snapshot?>(null)
+    val mapState: StateFlow<com.nscb.spiritscan.senses.MagMapEngine.Snapshot?> = _map
+    private val _mapOn = MutableStateFlow(false)
+    val mapOn: StateFlow<Boolean> = _mapOn
+
+    fun toggleMap() {
+        val on = !_mapOn.value
+        if (on) magMap.reset()
+        _mapOn.value = on
+        if (!on) _map.value = null
+    }
+
+    fun mapReset() = magMap.reset()
+
+    fun mapStepLength(m: Double) = magMap.setStepLength(m)
+
+    private val coin = com.nscb.spiritscan.senses.CoincidenceEngine(
+        arrayOf("MAG", "AUDIO", "SONAR", "CAM", "NOV", "MAP")
+    )
+    private val _coin = MutableStateFlow<com.nscb.spiritscan.senses.CoincidenceEngine.Snapshot?>(null)
+    val coinState: StateFlow<com.nscb.spiritscan.senses.CoincidenceEngine.Snapshot?> = _coin
+    private var lastChanged = 0
+
+    fun coincidenceReset() = coin.reset()
+
+    private fun coincidenceTick() {
+        val act = BooleanArray(6)
+        act[0] = (_residFilter.value?.active == true) || kotlin.math.abs(_output.value.zMag) >= 5f
+        val sc = scanner.state.value
+        act[1] = sc != null && (
+            sc.anomalies.any { !it.explained && it.active } ||
+                (sc.voice != null && sc.voice.eventsTotal > 0 && sc.voice.secSinceEvent < 3f)
+            )
+        val sn = _sonar.value
+        act[2] = sn != null && sn.ready && sn.targets.any { !it.living }
+        val d = _decode.value
+        act[3] = d != null && (
+            d.status == com.nscb.spiritscan.decode.DecodeStatus.UNEXPLAINED ||
+                (d.air?.pulses?.any { !it.explained && it.confirmed } == true)
+            )
+        val nv = passive.state.value
+        act[4] = nv != null && nv.phase == 3 &&
+            (nv.aeZ >= com.nscb.spiritscan.dsp.NoveltyCore.OPEN_Z || nv.mahaZ >= com.nscb.spiritscan.dsp.NoveltyCore.OPEN_Z)
+        val mp = _map.value
+        act[5] = mp != null && mp.changedCells > lastChanged
+        lastChanged = mp?.changedCells ?: 0
+        coin.tick(act, System.currentTimeMillis())
+        _coin.value = coin.snapshot()
+    }
+
+    @Volatile
+    private var headphonesCached = false
+
+    private val sonifier = com.nscb.spiritscan.sensor.Sonifier(appContext) { sonifyLevel() }
+    private val _sonifyMode = MutableStateFlow(0)
+    val sonifyMode: StateFlow<Int> = _sonifyMode
+
+    fun cycleSonify() {
+        val m = (_sonifyMode.value + 1) % 3
+        _sonifyMode.value = m
+        sonifier.mode = m
+        if (m > 0) sonifier.start() else sonifier.stop()
+    }
+
+    fun headphones(): Boolean = headphonesCached
+
+    /**
+     * Click rate driver, 0..1. Magnetometer, camera, novelty and coincidences always count. Microphone-derived
+     * channels (voice score, sonar) count only with headphones, otherwise the clicks would feed back into them.
+     */
+    private fun sonifyLevel(): Float {
+        var lv = kotlin.math.abs(_output.value.zMag) / 12f
+        val dec = _decode.value
+        if (dec != null) lv = maxOf(lv, dec.anomalyIndex * 0.8f)
+        val nv = passive.state.value
+        if (nv != null && nv.phase == 3) lv = maxOf(lv, maxOf(nv.aeZ, nv.mahaZ) / 12f)
+        val c = _coin.value
+        if (c != null) {
+            if (c.k >= 3) lv = maxOf(lv, 0.8f) else if (c.k >= 2) lv = maxOf(lv, 0.5f)
+        }
+        if (headphonesCached) {
+            val sc = scanner.state.value
+            if (sc != null && sc.voice != null) lv = maxOf(lv, sc.voice.score * 0.9f)
+            val sn = _sonar.value
+            if (sn != null && sn.ready && sn.targets.any { !it.living }) lv = maxOf(lv, 0.5f)
+        }
+        return lv.coerceIn(0f, 1f)
+    }
+
+    private val pareMeter by lazy { com.nscb.spiritscan.senses.PareidoliaMeter(120.0, 160.0) }
+    private val pareTally = com.nscb.spiritscan.senses.PareidoliaMeter.Tally()
+    private val _pare = MutableStateFlow<com.nscb.spiritscan.senses.PareState?>(null)
+    val pareState: StateFlow<com.nscb.spiritscan.senses.PareState?> = _pare
+    private var lastPareMs = 0L
+
+    fun pareReset() {
+        pareTally.frames = 0
+        pareTally.faceFrames = 0
+        pareTally.expected = 0.0
+        pareTally.variance = 0.0
+    }
+
+    private fun updatePareidolia(f: com.nscb.spiritscan.decode.DecodeFrame) {
+        val now = System.currentTimeMillis()
+        if (now - lastPareMs < 200) return
+        lastPareMs = now
+        val bl = f.blobs.filter { it.confirmed }
+        val n = bl.size
+        val xs = DoubleArray(n) { bl[it].cx * 120.0 }
+        val ys = DoubleArray(n) { bl[it].cy * 160.0 }
+        val rs = DoubleArray(n) { maxOf(2.0, maxOf(bl[it].halfW * 120.0, bl[it].halfH * 160.0)) }
+        val hits = pareMeter.scan(xs, ys, rs, n)
+        val face = hits.any { it.kind == 0 }
+        val fig = hits.any { it.kind == 1 }
+        val chance = pareMeter.chanceFace(n)
+        pareTally.add(n, face, chance)
+        val lines = ArrayList<FloatArray>()
+        for (h in hits.take(4)) {
+            val a = FloatArray(h.idx.size * 2 + 1)
+            a[0] = h.kind.toFloat()
+            for (i in h.idx.indices) {
+                a[1 + 2 * i] = bl[h.idx[i]].cx
+                a[2 + 2 * i] = bl[h.idx[i]].cy
+            }
+            lines.add(a)
+        }
+        _pare.value = com.nscb.spiritscan.senses.PareState(
+            n, chance, face, fig, lines,
+            pareTally.frames, pareTally.faceFrames, pareTally.expected, pareTally.z()
+        )
+    }
+
+    private var sensesJob: kotlinx.coroutines.Job? = null
+
+    fun startSenses() {
+        if (sensesJob != null) return
+        sensesJob = viewModelScope.launch {
+            var n = 0
+            while (true) {
+                kotlinx.coroutines.delay(100)
+                n++
+                try {
+                    if (_sonarOn.value) _sonar.value = sonar.snapshot()
+                    if (_mapOn.value) _map.value = magMap.snapshot()
+                    if (n % 20 == 0) headphonesCached = sonifier.headphonesConnected()
+                    if (n % 10 == 0) coincidenceTick()
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
     /** STRICT -> NORMAL -> LOOSE -> STRICT. Looser = tolerates more hand movement, more false candidates. */
     fun cycleDecodeLevel() {
         decoder.level = (decoder.level + 1) % 3
@@ -315,11 +504,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         // 0..1 = fraction of 1.0 rad/s (gyro) or 2.0 m/s^2 (accel deviation from 1 g).
         // The decoder compares this to its sensitivity-dependent gate (0.30 / 0.50 / 0.80).
         val phone = maxOf((gyro / 1.0f).coerceIn(0f, 1f), (acc / 2.0f).coerceIn(0f, 1f))
-        _decode.value = decoder.process(
+        val df = decoder.process(
             plane.buffer, plane.rowStride, plane.pixelStride,
             ip.width, ip.height, ip.imageInfo.rotationDegrees,
             ip.imageInfo.timestamp, phone
         )
+        _decode.value = df
+        updatePareidolia(df)
     }
 
     @Volatile
@@ -430,6 +621,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     val snap = sensors?.buffer?.snapshot().orEmpty()
                     lastSample = sample
+                    if (_mapOn.value) {
+                        magMap.push(
+                            sample.tNs / 1e9,
+                            sample.accX.toDouble(), sample.accY.toDouble(), sample.accZ.toDouble(),
+                            sample.gyroX.toDouble(), sample.gyroY.toDouble(), sample.gyroZ.toDouble(),
+                            sample.magUt.toDouble()
+                        )
+                    }
 
                     val out = engine.process(
                         sample = sample,
@@ -653,6 +852,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         sensors?.stop()
         trial.stop()
+        sonifier.stop()
+        sonarIo.stop()
         passive.stop()
         ctxFeeds.stop()
         scanner.stop()

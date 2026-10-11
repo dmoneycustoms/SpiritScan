@@ -12,6 +12,7 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import com.nscb.spiritscan.dsp.ScanEngine
 import com.nscb.spiritscan.dsp.ScanSnapshot
+import com.nscb.spiritscan.senses.DoaEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.concurrent.thread
@@ -34,6 +35,15 @@ class SpiritScanner(private val context: Context) {
     private val _error = MutableStateFlow("")
     val error: StateFlow<String> = _error
 
+    /** Two-microphone direction finder fed by the wide stream when the phone delivers real stereo. */
+    val doa = DoaEngine(0.14)
+    private val _doaState = MutableStateFlow<DoaEngine.Snapshot?>(null)
+    val doaState: StateFlow<DoaEngine.Snapshot?> = _doaState
+
+    /** Mono 48 kHz samples of the wide stream (the sonar listens here). Called on the capture thread. */
+    @Volatile
+    var wideListener: ((ShortArray, Int) -> Unit)? = null
+
     @Volatile
     var running = false
         private set
@@ -48,14 +58,19 @@ class SpiritScanner(private val context: Context) {
     private var pubThread: Thread? = null
 
     @SuppressLint("MissingPermission")
-    private fun openRecord(sr: Int, sources: List<Pair<Int, String>>): Pair<AudioRecord, String>? {
-        val min = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+    private fun openRecord(
+        sr: Int,
+        sources: List<Pair<Int, String>>,
+        channelMask: Int = AudioFormat.CHANNEL_IN_MONO
+    ): Pair<AudioRecord, String>? {
+        val min = AudioRecord.getMinBufferSize(sr, channelMask, AudioFormat.ENCODING_PCM_16BIT)
         if (min <= 0) return null
+        val chs = if (channelMask == AudioFormat.CHANNEL_IN_STEREO) 2 else 1
         for ((src, name) in sources) {
             try {
                 val rec = AudioRecord(
-                    src, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    maxOf(min, sr / 2) * 2
+                    src, sr, channelMask, AudioFormat.ENCODING_PCM_16BIT,
+                    maxOf(min, sr / 2) * 2 * chs
                 )
                 if (rec.state == AudioRecord.STATE_INITIALIZED) return Pair(rec, name)
                 rec.release()
@@ -99,13 +114,13 @@ class SpiritScanner(private val context: Context) {
             _error.value = "Microphone permission is needed for the scan"
             return
         }
-        val wide = openRecord(
-            48000,
-            listOf(
-                MediaRecorder.AudioSource.UNPROCESSED to "UNPROCESSED",
-                MediaRecorder.AudioSource.MIC to "MIC"
-            )
+        val wideSources = listOf(
+            MediaRecorder.AudioSource.UNPROCESSED to "UNPROCESSED",
+            MediaRecorder.AudioSource.MIC to "MIC"
         )
+        var wide = openRecord(48000, wideSources, AudioFormat.CHANNEL_IN_STEREO)
+        val stereo = wide != null
+        if (wide == null) wide = openRecord(48000, wideSources)
         if (wide == null) {
             _error.value = "Could not open the 48 kHz microphone (it may be in use)"
             return
@@ -142,26 +157,38 @@ class SpiritScanner(private val context: Context) {
         }
         wideRec = wideRecord
         voiceRec = voiceRecord
-        engine.setSources("48 kHz ${wide.second}", voiceDesc)
+        engine.setSources("48 kHz ${wide.second}${if (stereo) " stereo" else ""}", voiceDesc)
         engine.fastAdapt()
         running = true
         val decimateVoice = voiceRecord == null
 
         wideThread = thread(name = "scan-wide") {
+            val chs = if (stereo) 2 else 1
+            val raw = ShortArray(1920 * chs)
             val buf = ShortArray(1920)
             val dec = ShortArray(640)
             var acc = 0
             var cnt = 0
             var di = 0
             while (running) {
-                val r = try {
-                    wideRecord.read(buf, 0, buf.size)
+                val rr = try {
+                    wideRecord.read(raw, 0, raw.size)
                 } catch (_: Exception) {
                     -1
                 }
-                if (r < 0) break
-                if (r == 0) continue
+                if (rr < 0) break
+                if (rr == 0) continue
+                val r = rr / chs
+                if (stereo) {
+                    for (i in 0 until r) {
+                        buf[i] = ((raw[2 * i].toInt() + raw[2 * i + 1].toInt()) / 2).toShort()
+                    }
+                    doa.push(raw, r)
+                } else {
+                    System.arraycopy(raw, 0, buf, 0, r)
+                }
                 engine.pushWide(buf, r)
+                wideListener?.invoke(buf, r)
                 if (decimateVoice) {
                     for (i in 0 until r) {
                         acc += buf[i].toInt()
@@ -199,6 +226,7 @@ class SpiritScanner(private val context: Context) {
             while (running) {
                 try {
                     _state.value = engine.snapshot()
+                    _doaState.value = doa.snapshot()
                 } catch (_: Exception) {
                 }
                 try {

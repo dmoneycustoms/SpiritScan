@@ -83,6 +83,7 @@ public final class BandScanner {
     private int frames;
     private int fastAdapt;
     private int burstHold;
+    private boolean[] masked = new boolean[0];
 
     private final double[] lvl;
     private final float[] excessNow;
@@ -151,6 +152,16 @@ public final class BandScanner {
     /** Frequency (Hz) the spirit box is currently emitting, or 0. Events near it are explained as "OWN BOX". */
     public synchronized void setOwnHz(double hz) {
         ownHz = hz;
+    }
+
+    /** Bands overlapping [loHz, hiHz] never raise anomalies (our own sonar chirp lives there). 0,0 clears the mask. */
+    public synchronized void setMask(double loHz, double hiHz) {
+        boolean[] m = new boolean[bands];
+        if (hiHz > loHz) {
+            for (int b = 0; b < bands; b++) m[b] = edgesHz[b + 1] >= loHz && edgesHz[b] <= hiHz;
+        }
+        masked = m;
+        fastAdapt = 140;
     }
 
     /** Re-learn floors quickly for ~3 s (call when the box turns on/off or the room changes). */
@@ -228,7 +239,7 @@ public final class BandScanner {
             double ex = lvl[b] - floorDb[b];
             double z = ex / Math.max(sdDb[b], 1.5);
             excessNow[b] = (float) ex;
-            hit[b] = z > THR_Z && ex > THR_DB;
+            hit[b] = z > THR_Z && ex > THR_DB && !(b < masked.length && masked[b]);
             double alpha = (fastAdapt > 0) ? 0.08 : (z > 3.0 ? 0.0004 : 0.01);
             floorDb[b] += alpha * (lvl[b] - floorDb[b]);
             if (z < 3.0 || fastAdapt > 0) {

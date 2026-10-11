@@ -8,3 +8,5 @@ Synthetic-signal tests for the Java engines in `dsp/` and `air/`. Needs a JDK:
     java -cp out Fa2       # band scanner false alarms: 20 min of noise
     java -cp out Test1     # band scanner: tones, ultrasonic, mains, click
     java -cp out AirTest   # AIR engine: noise, drift, pulses, air shimmer, flicker, tremor
+
+v9.0 tests (also need senses/*.java on the class path): SonarTest, SonarDbg, DoaTest, DoaNoise, MapTest, CoincTest, ParTest.

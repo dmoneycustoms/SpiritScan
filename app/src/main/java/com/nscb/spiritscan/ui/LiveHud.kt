@@ -83,6 +83,15 @@ import com.nscb.spiritscan.vision.DetectedObjectBox
 import com.nscb.spiritscan.camera.DecodeCameraTuning
 import com.nscb.spiritscan.ui.decode.AirOverlay
 import com.nscb.spiritscan.ui.decode.DecodeOverlay
+import com.nscb.spiritscan.ui.senses.CoincidenceCard
+import com.nscb.spiritscan.ui.senses.DoaStrip
+import com.nscb.spiritscan.ui.senses.GeigerCard
+import com.nscb.spiritscan.ui.senses.MapCard
+import com.nscb.spiritscan.ui.senses.PareidoliaCard
+import com.nscb.spiritscan.ui.senses.PareidoliaOverlay
+import com.nscb.spiritscan.ui.senses.SonarCard
+import com.nscb.spiritscan.ui.senses.SoundCamCard
+import com.nscb.spiritscan.ui.senses.SyncRing
 import com.nscb.spiritscan.ui.research.ContextCard
 import com.nscb.spiritscan.ui.research.NoveltyStrip
 import com.nscb.spiritscan.ui.research.PassiveCard
@@ -312,7 +321,18 @@ fun LiveHud(vm: ScanViewModel) {
     val nov by vm.novelty.collectAsState()
     val passiveOn by vm.passiveOn.collectAsState()
     val trialSt by vm.trialState.collectAsState()
-    androidx.compose.runtime.LaunchedEffect(Unit) { vm.startContext() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        vm.startContext()
+        vm.startSenses()
+    }
+    val sonarSnap by vm.sonarState.collectAsState()
+    val sonarOn by vm.sonarOn.collectAsState()
+    val doaSnap by vm.doaState.collectAsState()
+    val mapSnap by vm.mapState.collectAsState()
+    val mapOn by vm.mapOn.collectAsState()
+    val coinSnap by vm.coinState.collectAsState()
+    val sonifyMode by vm.sonifyMode.collectAsState()
+    val pare by vm.pareState.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -490,6 +510,11 @@ fun LiveHud(vm: ScanViewModel) {
             }
 
             NoveltyStrip(nov)
+            SyncRing(coinSnap)
+            DoaStrip(doaSnap)
+            if (filter == FilterMode.DECODE || filter == FilterMode.AIR) {
+                PareidoliaOverlay(pare, decode?.w ?: 120, decode?.h ?: 160)
+            }
 
             Text(
                 "${filter.label} · objs ${objects.size}",
@@ -978,6 +1003,28 @@ fun LiveHud(vm: ScanViewModel) {
                 onNull = { vm.scanNullTest() },
                 onClearNull = { vm.scanNullClear() }
             )
+
+            CoincidenceCard(snap = coinSnap, onReset = { vm.coincidenceReset() })
+
+            SonarCard(snap = sonarSnap, on = sonarOn, onToggle = { vm.toggleSonar() })
+
+            SoundCamCard(
+                doa = doaSnap,
+                onCal = { vm.doaCalibrate() },
+                onClear = { vm.doaClearCalibration() }
+            )
+
+            MapCard(
+                snap = mapSnap,
+                on = mapOn,
+                onToggle = { vm.toggleMap() },
+                onReset = { vm.mapReset() },
+                onStepLength = { vm.mapStepLength(it) }
+            )
+
+            GeigerCard(mode = sonifyMode, headphones = vm.headphones(), onCycle = { vm.cycleSonify() })
+
+            PareidoliaCard(p = pare, onReset = { vm.pareReset() })
 
             TrialCard(
                 st = trialSt,
