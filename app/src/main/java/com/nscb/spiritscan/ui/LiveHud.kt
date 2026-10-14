@@ -84,6 +84,8 @@ import com.nscb.spiritscan.camera.DecodeCameraTuning
 import com.nscb.spiritscan.ui.decode.AirOverlay
 import com.nscb.spiritscan.ui.decode.DecodeOverlay
 import com.nscb.spiritscan.ui.senses.CoincidenceCard
+import com.nscb.spiritscan.ui.senses.HarnessCard
+import com.nscb.spiritscan.ui.senses.ParticleCard
 import com.nscb.spiritscan.ui.senses.DoaStrip
 import com.nscb.spiritscan.ui.senses.GeigerCard
 import com.nscb.spiritscan.ui.senses.MapCard
@@ -213,6 +215,11 @@ private fun CameraWithDetection(
 
     DisposableEffect(Unit) {
         onDispose {
+            // free the camera for the particle detector (Camera2 needs exclusive access)
+            try {
+                ProcessCameraProvider.getInstance(context).get().unbindAll()
+            } catch (_: Exception) {
+            }
             detector.close()
             analysisExecutor.shutdown()
         }
@@ -333,6 +340,11 @@ fun LiveHud(vm: ScanViewModel) {
     val coinSnap by vm.coinState.collectAsState()
     val sonifyMode by vm.sonifyMode.collectAsState()
     val pare by vm.pareState.collectAsState()
+    val particleSnap by vm.particleState.collectAsState()
+    val particleOn by vm.particleOn.collectAsState()
+    val particleErr by vm.particleError.collectAsState()
+    val particleInfo by vm.particleInfo.collectAsState()
+    val harnessSt by vm.harnessState.collectAsState()
     val ctx = LocalContext.current
 
     var filter by remember { mutableStateOf(FilterMode.HEAT) }
@@ -448,15 +460,27 @@ fun LiveHud(vm: ScanViewModel) {
                     shape = RoundedCornerShape(4.dp)
                 )
         ) {
-            CameraWithDetection(
-                modifier = Modifier.fillMaxSize(),
-                onObjects = { objects = it },
-                onFrameResidual = { r -> vm.onVisionFrame(r) },
-                onLumGrid = { g -> vm.onLumGrid(g) },
-                onFrame = { ip -> vm.decodeFrame(ip) },
-                decodeLock = filter == FilterMode.DECODE || filter == FilterMode.AIR,
-                onExposureLocked = { vm.resetDecoder() }
-            )
+            if (!particleOn) {
+                CameraWithDetection(
+                    modifier = Modifier.fillMaxSize(),
+                    onObjects = { objects = it },
+                    onFrameResidual = { r -> vm.onVisionFrame(r) },
+                    onLumGrid = { g -> vm.onLumGrid(g) },
+                    onFrame = { ip -> vm.decodeFrame(ip) },
+                    decodeLock = filter == FilterMode.DECODE || filter == FilterMode.AIR,
+                    onExposureLocked = { vm.resetDecoder() }
+                )
+            } else {
+                Text(
+                    "PARTICLE MODE · the camera belongs to the detector (keep the lens covered)",
+                    color = Color(0xFFFFB020),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(16.dp)
+                )
+            }
 
             when (filter) {
                 FilterMode.CAM -> {}
@@ -1002,6 +1026,22 @@ fun LiveHud(vm: ScanViewModel) {
                 onToggle = { vm.toggleScan() },
                 onNull = { vm.scanNullTest() },
                 onClearNull = { vm.scanNullClear() }
+            )
+
+            ParticleCard(
+                snap = particleSnap,
+                info = particleInfo,
+                err = particleErr,
+                on = particleOn,
+                onToggle = { vm.toggleParticle() },
+                onReset = { vm.particleReset() }
+            )
+
+            HarnessCard(
+                names = vm.harnessNames,
+                st = harnessSt,
+                onStart = { vm.harnessStart(it) },
+                onStop = { vm.harnessStop() }
             )
 
             CoincidenceCard(snap = coinSnap, onReset = { vm.coincidenceReset() })

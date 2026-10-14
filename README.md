@@ -74,3 +74,5 @@ v8.8.0: **AIR** HUD mode (micro-variation, air-flow, pulse sources) and Spirit B
 v8.9.0: live context (space weather, weather, quakes), passive ONNX novelty with a trained autoencoder, sham-controlled trial runner. See `docs/passive-onnx.md`.
 
 v9.0.0: ultrasonic sonar, coincidence engine, magnetic floor map, sound camera, Geiger mode, pareidolia meter. See `docs/senses-v9.md`.
+
+v9.1.0: covered-camera particle detector and a ground-truth harness that measures each channel's detection limit with planted stimuli. See `docs/particles-harness.md`.

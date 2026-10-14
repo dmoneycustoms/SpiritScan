@@ -351,7 +351,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun mapStepLength(m: Double) = magMap.setStepLength(m)
 
     private val coin = com.nscb.spiritscan.senses.CoincidenceEngine(
-        arrayOf("MAG", "AUDIO", "SONAR", "CAM", "NOV", "MAP")
+        arrayOf("MAG", "AUDIO", "SONAR", "CAM", "NOV", "MAP", "RAD")
     )
     private val _coin = MutableStateFlow<com.nscb.spiritscan.senses.CoincidenceEngine.Snapshot?>(null)
     val coinState: StateFlow<com.nscb.spiritscan.senses.CoincidenceEngine.Snapshot?> = _coin
@@ -360,7 +360,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun coincidenceReset() = coin.reset()
 
     private fun coincidenceTick() {
-        val act = BooleanArray(6)
+        val act = BooleanArray(7)
         act[0] = (_residFilter.value?.active == true) || kotlin.math.abs(_output.value.zMag) >= 5f
         val sc = scanner.state.value
         act[1] = sc != null && (
@@ -380,6 +380,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         val mp = _map.value
         act[5] = mp != null && mp.changedCells > lastChanged
         lastChanged = mp?.changedCells ?: 0
+        val ps = _particle.value
+        act[6] = ps != null && ps.calibrated && (ps.elevated || ps.burst)
         coin.tick(act, System.currentTimeMillis())
         _coin.value = coin.snapshot()
     }
@@ -466,6 +468,154 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    // ---- v9.1 particle detector and ground-truth harness ----------------------------------
+    private val particleEngine = com.nscb.spiritscan.senses.ParticleEngine()
+    private val particleCam = com.nscb.spiritscan.sensor.ParticleCamera(appContext, particleEngine)
+    private val _particleOn = MutableStateFlow(false)
+    val particleOn: StateFlow<Boolean> = _particleOn
+    private val _particle = MutableStateFlow<com.nscb.spiritscan.senses.ParticleEngine.Snapshot?>(null)
+    val particleState: StateFlow<com.nscb.spiritscan.senses.ParticleEngine.Snapshot?> = _particle
+    private val _particleErr = MutableStateFlow("")
+    val particleError: StateFlow<String> = _particleErr
+    val particleInfo: StateFlow<String> = particleCam.info
+
+    /** The HUD releases CameraX when [particleOn] turns true; the Camera2 session opens a moment later. */
+    fun toggleParticle() {
+        if (_particleOn.value) {
+            particleCam.stop()
+            // give Camera2 a moment to release the device before the HUD rebinds CameraX
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(700)
+                _particleOn.value = false
+                _particle.value = null
+            }
+            return
+        }
+        particleEngine.reset()
+        _particleErr.value = ""
+        _particleOn.value = true
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(1000)
+            val err = particleCam.start()
+            if (err != null) {
+                _particleErr.value = err
+                _particleOn.value = false
+            }
+        }
+    }
+
+    fun particleReset() = particleEngine.reset()
+
+    private fun buildProtocols(): List<com.nscb.spiritscan.trial.HarnessProtocol> {
+        val list = ArrayList<com.nscb.spiritscan.trial.HarnessProtocol>()
+        list.add(
+            com.nscb.spiritscan.trial.HarnessProtocol(
+                id = "mag", title = "Magnetometer",
+                levels = listOf("25 cm", "12 cm", "6 cm"),
+                levelText = listOf(
+                    "hold a magnet (or speaker, headphone case) 25 cm from the phone and keep it still",
+                    "hold the magnet 12 cm from the phone and keep it still",
+                    "hold the magnet 6 cm from the phone and keep it still"
+                ),
+                windowSec = 20, repsPerLevel = 2, shams = 6, threshold = 5.0, unit = " z",
+                requirement = { null },
+                metric = { kotlin.math.abs(_output.value.zMag).toDouble() }
+            )
+        )
+        list.add(
+            com.nscb.spiritscan.trial.HarnessProtocol(
+                id = "tone", title = "Band scanner (tone)",
+                levels = listOf("quiet", "medium", "loud"),
+                levelText = listOf(
+                    "play a steady 1 kHz tone from another device about 1 m away, QUIET",
+                    "play the 1 kHz tone from another device about 1 m away, MEDIUM volume",
+                    "play the 1 kHz tone from another device about 1 m away, LOUD"
+                ),
+                windowSec = 20, repsPerLevel = 2, shams = 6, threshold = 7.0, unit = " dB",
+                requirement = { if (!_scanOn.value) "Start the Spirit Box scan first" else null },
+                metric = { scanner.state.value?.excess?.maxOrNull()?.toDouble() ?: Double.NaN }
+            )
+        )
+        list.add(
+            com.nscb.spiritscan.trial.HarnessProtocol(
+                id = "voice", title = "Voice signature",
+                levels = listOf("whisper", "normal", "loud"),
+                levelText = listOf(
+                    "WHISPER 'one two three four five' about 1 m from the phone",
+                    "say 'one two three four five' at NORMAL volume about 1 m from the phone",
+                    "say 'one two three four five' LOUDLY about 1 m from the phone"
+                ),
+                windowSec = 20, repsPerLevel = 2, shams = 6, threshold = 1.0, unit = " event",
+                requirement = { if (!_scanOn.value) "Start the Spirit Box scan first" else null },
+                metric = {
+                    val v = scanner.state.value?.voice
+                    if (v == null) Double.NaN else if (v.eventsTotal > 0 && v.secSinceEvent < 2f) 1.0 else 0.0
+                }
+            )
+        )
+        list.add(
+            com.nscb.spiritscan.trial.HarnessProtocol(
+                id = "sonar", title = "Ultrasonic sonar",
+                levels = listOf("2 m", "1 m", "0.5 m"),
+                levelText = listOf(
+                    "wave your hand slowly about 2 m in front of the phone",
+                    "wave your hand slowly about 1 m in front of the phone",
+                    "wave your hand slowly about 0.5 m in front of the phone"
+                ),
+                windowSec = 20, repsPerLevel = 2, shams = 6, threshold = 10.8, unit = " dB",
+                requirement = {
+                    if (!_sonarOn.value) "Start the sonar first (phone still on a table, you out of range while it learns)" else null
+                },
+                metric = {
+                    val s = _sonar.value
+                    if (s == null || !s.ready) Double.NaN else (s.motionDb.maxOrNull() ?: 0f).toDouble()
+                }
+            )
+        )
+        list.add(
+            com.nscb.spiritscan.trial.HarnessProtocol(
+                id = "air", title = "AIR flow (camera)",
+                levels = listOf("20 cm", "10 cm", "5 cm"),
+                levelText = listOf(
+                    "hold a mug of hot (not boiling) water about 20 cm in front of a textured background in view",
+                    "hold the mug about 10 cm in front of the textured background",
+                    "hold the mug about 5 cm in front of the textured background"
+                ),
+                windowSec = 20, repsPerLevel = 2, shams = 6, threshold = 0.3, unit = " idx",
+                requirement = {
+                    if (_decode.value?.air == null) "Select the AIR chip, point at a textured background, hold still until readings appear" else null
+                },
+                metric = { _decode.value?.air?.airIndex?.toDouble() ?: Double.NaN }
+            )
+        )
+        list.add(
+            com.nscb.spiritscan.trial.HarnessProtocol(
+                id = "particle", title = "Particle detector (source)",
+                levels = listOf("source 10 cm", "source at lens"),
+                levelText = listOf(
+                    "keep a low-level source (uranium glass, orange Fiestaware) about 10 cm from the covered lens",
+                    "keep the source touching the tape over the lens"
+                ),
+                windowSec = 120, repsPerLevel = 2, shams = 4, threshold = 1.0, unit = " events",
+                requirement = {
+                    val ps = _particle.value
+                    if (!_particleOn.value || ps == null || !ps.calibrated) "Start the particle detector first and wait until it is listening" else null
+                },
+                metric = { _particle.value?.particleLike?.toDouble() ?: Double.NaN },
+                score = { s -> if (s.size < 2) 0.0 else s[s.size - 1] - s[0] }
+            )
+        )
+        return list
+    }
+
+    private val harness = com.nscb.spiritscan.trial.HarnessEngine(viewModelScope, appContext, buildProtocols())
+    val harnessState: StateFlow<com.nscb.spiritscan.trial.HarnessState> = harness.state
+    val harnessNames: List<String> = harness.protocols.map { it.title }
+
+    fun harnessStart(i: Int) = harness.start(i)
+
+    fun harnessStop() = harness.stop()
+
     private var sensesJob: kotlinx.coroutines.Job? = null
 
     fun startSenses() {
@@ -478,6 +628,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     if (_sonarOn.value) _sonar.value = sonar.snapshot()
                     if (_mapOn.value) _map.value = magMap.snapshot()
+                    if (_particleOn.value) _particle.value = particleEngine.snapshot(System.currentTimeMillis())
                     if (n % 20 == 0) headphonesCached = sonifier.headphonesConnected()
                     if (n % 10 == 0) coincidenceTick()
                 } catch (_: Exception) {
@@ -854,6 +1005,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         trial.stop()
         sonifier.stop()
         sonarIo.stop()
+        harness.stop()
+        particleCam.stop()
         passive.stop()
         ctxFeeds.stop()
         scanner.stop()

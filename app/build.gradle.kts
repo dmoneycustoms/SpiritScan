@@ -11,8 +11,8 @@ android {
         applicationId = "com.nscb.spiritscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 92
-        versionName = "9.0.0-senses"
+        versionCode = 93
+        versionName = "9.1.0-particles-harness"
     }
     buildTypes {
         release {

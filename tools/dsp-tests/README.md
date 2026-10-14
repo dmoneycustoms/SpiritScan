@@ -10,3 +10,4 @@ Synthetic-signal tests for the Java engines in `dsp/` and `air/`. Needs a JDK:
     java -cp out AirTest   # AIR engine: noise, drift, pulses, air shimmer, flicker, tremor
 
 v9.0 tests (also need senses/*.java on the class path): SonarTest, SonarDbg, DoaTest, DoaNoise, MapTest, CoincTest, ParTest.
+v9.1 tests: ParticleTest (minutes of simulated sensor frames, slow), ParticleRate (rate statistics), HarnessTest.
